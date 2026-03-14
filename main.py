@@ -2,7 +2,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QThread
+from PyQt6.QtCore import QThread, QTimer
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -14,6 +14,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QInputDialog,
+    QSpinBox,  # 新增
 )
 from serial.tools import list_ports
 
@@ -37,6 +39,8 @@ class MainWindow(QMainWindow):
         self._byte_count = 0
         self._recording = False
         self._simulate_mode = False
+        self._timer: QTimer | None = None
+        self._timer_seconds: int = 0
 
         self._setup_ui()
         self._refresh_ports()
@@ -58,6 +62,18 @@ class MainWindow(QMainWindow):
         self.baud_combo.setCurrentText("115200")
         row1.addWidget(self.baud_combo)
         layout.addLayout(row1)
+
+        # 定时输入
+        row_timer = QHBoxLayout()
+        row_timer.addWidget(QLabel("定时(秒):"))
+        self.timer_spin = QSpinBox()
+        self.timer_spin.setMinimum(0)
+        self.timer_spin.setMaximum(24*60*60)  # 最多24小时
+        self.timer_spin.setValue(0)
+        self.timer_spin.setToolTip("0为不限时")
+        row_timer.addWidget(self.timer_spin)
+        row_timer.addStretch()
+        layout.addLayout(row_timer)
 
         self.check_simulate = QCheckBox("模拟串口模式")
         self.check_simulate.setChecked(False)
@@ -215,9 +231,10 @@ class MainWindow(QMainWindow):
         if self._recording:
             self._stop_record(write_footer=True)
         else:
-            self._start_record()
+            seconds = self.timer_spin.value()
+            self._start_record(seconds)
 
-    def _start_record(self):
+    def _start_record(self, seconds: int = 0):
         self._record_start_time = datetime.now()
         if self._simulate_mode:
             self._current_port = "模拟串口"
@@ -245,10 +262,38 @@ class MainWindow(QMainWindow):
             self._file_handle.flush()
             self._recording = True
             self.btn_record.setText("停止记录")
+            # 定时器逻辑
+            if seconds and seconds > 0:
+                self._timer_seconds = seconds
+                self._timer = QTimer(self)
+                self._timer.timeout.connect(self._on_timer_tick)
+                self._timer.start(1000)  # 每秒触发
+                self.btn_record.setText(f"停止记录 ({self._timer_seconds}s)")
+            else:
+                self._timer = None
+                self._timer_seconds = 0
         except OSError as e:
             QMessageBox.critical(self, "错误", f"无法创建文件: {e}")
 
+    def _on_timer_tick(self):
+        if not self._recording:
+            if self._timer:
+                self._timer.stop()
+            return
+        self._timer_seconds -= 1
+        if self._timer_seconds > 0:
+            self.btn_record.setText(f"停止记录 ({self._timer_seconds}s)")
+        else:
+            if self._timer:
+                self._timer.stop()
+            self._stop_record(write_footer=True)
+
     def _stop_record(self, write_footer: bool = False):
+        # 停止定时器
+        if self._timer:
+            self._timer.stop()
+            self._timer = None
+            self._timer_seconds = 0
         if self._file_handle:
             if write_footer:
                 end_time = datetime.now()
