@@ -1,25 +1,30 @@
 """串口读取上位机 - 主程序入口。"""
+import re
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, QTimer
+from PyQt6.QtCore import QThread, QTimer, QUrl
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
-    QInputDialog,
-    QSpinBox,  # 新增
 )
 from serial.tools import list_ports
 
 from serial_reader import SerialWorker, SimulateWorker, load_simulate_input
+from process_data import parse_file
 
 
 class MainWindow(QMainWindow):
@@ -28,7 +33,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("串口数据读取")
-        self.resize(400, 180)
+        self.resize(500, 200)
 
         self._thread: QThread | None = None
         self._worker: SerialWorker | None = None
@@ -41,6 +46,8 @@ class MainWindow(QMainWindow):
         self._simulate_mode = False
         self._timer: QTimer | None = None
         self._timer_seconds: int = 0
+        self._text_buffer = ""  # 用于解析 offset/delay 对
+        self._waiting_trigger = False  # 等待设备就绪信号后开始写入
 
         self._setup_ui()
         self._refresh_ports()
@@ -79,16 +86,19 @@ class MainWindow(QMainWindow):
         self.check_simulate.setChecked(False)
         layout.addWidget(self.check_simulate)
 
-        # 按钮
+        # 按钮（合并打开串口+开始记录：点击开始后等待 client start 等就绪信号，再写入 offset/delay）
         row2 = QHBoxLayout()
-        self.btn_open = QPushButton("打开串口")
-        self.btn_open.clicked.connect(self._on_open_serial)
-        row2.addWidget(self.btn_open)
+        self.btn_start = QPushButton("开始")
+        self.btn_start.clicked.connect(self._on_start_stop)
+        row2.addWidget(self.btn_start)
 
-        self.btn_record = QPushButton("开始记录")
-        self.btn_record.clicked.connect(self._on_toggle_record)
-        self.btn_record.setEnabled(False)
-        row2.addWidget(self.btn_record)
+        self.btn_process_data = QPushButton("数据处理")
+        self.btn_process_data.clicked.connect(self._on_process_data)
+        row2.addWidget(self.btn_process_data)
+
+        self.btn_open_folder = QPushButton("打开文件夹")
+        self.btn_open_folder.clicked.connect(self._on_open_folder)
+        row2.addWidget(self.btn_open_folder)
 
         row2.addStretch()
         layout.addLayout(row2)
@@ -98,6 +108,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.lbl_status)
         self.lbl_bytes = QLabel("已接收: 0 字节")
         layout.addWidget(self.lbl_bytes)
+        self.lbl_offset = QLabel("offset: --")
+        layout.addWidget(self.lbl_offset)
+        self.lbl_delay = QLabel("delay: --")
+        layout.addWidget(self.lbl_delay)
         layout.addStretch()
 
     def _refresh_ports(self):
@@ -108,11 +122,50 @@ class MainWindow(QMainWindow):
         if not ports:
             self.port_combo.addItem("无可用串口", None)
 
-    def _on_open_serial(self):
+    # 设备就绪信号：收到后创建文件并开始写入 offset/delay
+    _TRIGGER_PATTERN = re.compile(
+        r"client\s+start!?|join\s+NET\s+success|INF:.*HASCH.*Init\s+OK!?|Time\s+Slot\s+index",
+        re.IGNORECASE,
+    )
+
+    def _on_start_stop(self):
         if self._worker and self._thread and self._thread.isRunning():
             self._close_serial()
         else:
             self._open_serial()
+
+    def _on_open_folder(self):
+        """打开 historydata 文件夹。"""
+        history_dir = Path(__file__).parent / "historydata"
+        history_dir.mkdir(exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(history_dir)))
+
+    def _on_process_data(self):
+        """打开文件选择对话框，处理选中的数据文件。"""
+        history_dir = Path(__file__).parent / "historydata"
+        history_dir.mkdir(exist_ok=True)
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择数据文件",
+            str(history_dir),
+            "文本文件 (*.txt);;所有文件 (*)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            offsets, delays, converge_time = parse_file(file_path)
+            if not offsets or not delays:
+                QMessageBox.warning(self, "提示", "未找到有效的 offset/Delay 数据！")
+                return
+            
+            # 显示结果窗口
+            result_dialog = ResultDialog(offsets, delays, converge_time, file_path, self)
+            result_dialog.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"处理文件出错: {e}")
 
     def _open_serial(self):
         self._simulate_mode = self.check_simulate.isChecked()
@@ -145,12 +198,13 @@ class MainWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         self._thread.start()
 
-        self.lbl_status.setText("状态: 模拟串口已连接（连接中...）")
-        self.btn_open.setText("关闭串口")
-        self.btn_open.setEnabled(True)
+        self.lbl_status.setText("状态: 模拟串口已连接，等待设备就绪...")
+        self.btn_start.setText("停止")
+        self.btn_start.setEnabled(True)
         self.port_combo.setEnabled(False)
         self.baud_combo.setEnabled(False)
         self.check_simulate.setEnabled(False)
+        self._waiting_trigger = True
 
     def _open_real_serial(self):
         """打开真实串口。"""
@@ -176,22 +230,23 @@ class MainWindow(QMainWindow):
         self._thread.start()
 
         self.lbl_status.setText("状态: 连接中...")
-        self.btn_open.setText("关闭串口")
-        self.btn_open.setEnabled(True)
+        self.btn_start.setText("停止")
+        self.btn_start.setEnabled(True)
         self.port_combo.setEnabled(False)
         self.baud_combo.setEnabled(False)
         self.check_simulate.setEnabled(False)
+        self._waiting_trigger = True
 
     def _on_connected(self):
         if self._simulate_mode:
-            self.lbl_status.setText("状态: 模拟串口已连接")
+            self.lbl_status.setText("状态: 模拟串口已连接，等待设备就绪...")
         else:
-            self.lbl_status.setText("状态: 已连接")
-        self.btn_record.setEnabled(True)
+            self.lbl_status.setText("状态: 已连接，等待设备就绪...")
 
     def _close_serial(self):
         if self._recording:
             self._stop_record(write_footer=True)
+        self._waiting_trigger = False
         if self._worker:
             self._worker.close()
         if self._thread and self._thread.isRunning():
@@ -200,80 +255,118 @@ class MainWindow(QMainWindow):
         self._thread = None
         self._worker = None
         self.lbl_status.setText("状态: 未连接")
-        self.btn_open.setText("打开串口")
-        self.btn_record.setEnabled(False)
+        self.lbl_offset.setText("offset: --")
+        self.lbl_delay.setText("delay: --")
+        self.btn_start.setText("开始")
         self.port_combo.setEnabled(True)
         self.baud_combo.setEnabled(True)
         self.check_simulate.setEnabled(True)
 
     def _on_disconnected(self):
-        self.btn_open.setEnabled(True)
+        self.btn_start.setEnabled(True)
 
-    def _on_data_received(self, data: bytes):
-        self._byte_count += len(data)
-        self.lbl_bytes.setText(f"已接收: {self._byte_count} 字节")
-
-        if self._recording and self._file_handle:
-            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            try:
-                text = data.decode("utf-8").rstrip("\r\n")
-                out = text if text else data.hex()
-            except UnicodeDecodeError:
-                out = data.hex()
-            self._file_handle.write(f"[{ts}] {out}\n")
-            self._file_handle.flush()
-
-    def _on_error(self, msg: str):
-        QMessageBox.critical(self, "串口错误", msg)
-        self._close_serial()
-
-    def _on_toggle_record(self):
-        if self._recording:
-            self._stop_record(write_footer=True)
-        else:
-            seconds = self.timer_spin.value()
-            self._start_record(seconds)
-
-    def _start_record(self, seconds: int = 0):
-        self._record_start_time = datetime.now()
+    def _on_trigger(self, ts: str):
+        """收到设备就绪信号，创建文件并开始写入 offset/delay。"""
+        if self._recording or self._file_handle:
+            return
         if self._simulate_mode:
             self._current_port = "模拟串口"
         else:
             self._current_port = self.port_combo.currentData() or self.port_combo.currentText()
         baud = self.baud_combo.currentText()
-
-        # 文件名: 日期_开始时间，如 2025-03-09_10-00-00.txt
+        self._record_start_time = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S.%f")
         date_str = self._record_start_time.strftime("%Y-%m-%d")
         time_str = self._record_start_time.strftime("%H-%M-%S")
         filename = f"{date_str}_{time_str}.txt"
-
         history_dir = Path(__file__).parent / "historydata"
         history_dir.mkdir(exist_ok=True)
         path = history_dir / filename
-
         try:
             self._file_handle = open(path, "w", encoding="utf-8")
             self._record_path = str(path)
-            # 写入头部：分割线表达时间、设备
             sep = "=" * 60
-            start_ts = self._record_start_time.strftime("%Y-%m-%d %H:%M:%S")
-            header = f"{sep}\n开始时间: {start_ts}  设备: {self._current_port}  波特率: {baud}\n{sep}\n"
+            header = f"{sep}\n设备就绪时间: {ts}  设备: {self._current_port}  波特率: {baud}\n{sep}\n"
             self._file_handle.write(header)
             self._file_handle.flush()
             self._recording = True
-            self.btn_record.setText("停止记录")
-            # 定时器逻辑
-            if seconds and seconds > 0:
-                self._timer_seconds = seconds
+            self._waiting_trigger = False
+            self.lbl_status.setText("状态: 已就绪，正在记录 offset/delay")
+
+            # 启动定时器（支持模拟模式）
+            if self.timer_spin.value() > 0:
+                self._timer_seconds = self.timer_spin.value()
                 self._timer = QTimer(self)
                 self._timer.timeout.connect(self._on_timer_tick)
-                self._timer.start(1000)  # 每秒触发
-                self.btn_record.setText(f"停止记录 ({self._timer_seconds}s)")
-            else:
-                self._timer = None
-                self._timer_seconds = 0
+                self._timer.start(1000)
         except OSError as e:
             QMessageBox.critical(self, "错误", f"无法创建文件: {e}")
+
+    def _process_text_buffer(self, ts: str) -> None:
+        """解析缓冲区：提取 offset/delay 对（每对一个时间戳），输出其他完整行。"""
+        if not self._recording or not self._file_handle:
+            return
+        buf = re.sub(r"d\s+elay", "delay", self._text_buffer, flags=re.IGNORECASE)
+        buf = re.sub(r"of\s+fset", "offset", buf, flags=re.IGNORECASE)
+        pair_pat = re.compile(
+            r"offset\s*:\s*([-\d.]+)\s+delay\s*:\s*([-\d.]+)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        pos = 0
+        other_parts = []
+        while True:
+            m = pair_pat.search(buf, pos)
+            if not m:
+                break
+            if m.start() > pos:
+                other_parts.append(buf[pos : m.start()])
+            off_val, dly_val = m.group(1), m.group(2)
+            self._file_handle.write(f"[{ts}] offset:{off_val}  delay:{dly_val}\n")
+            self.lbl_offset.setText(f"offset: {off_val}")
+            self.lbl_delay.setText(f"delay: {dly_val}")
+            pos = m.end()
+        remain = buf[pos:] if pos < len(buf) else ""
+        lines = remain.split("\n")
+        keep_tail = []
+        for i, line in enumerate(lines):
+            line = line.strip("\r")
+            is_last = i == len(lines) - 1
+            if is_last:
+                keep_tail.append(line)
+                break
+            if not line:
+                continue
+            has_offset = bool(re.search(r"offset\s*:\s*[-\d.]+", line, re.IGNORECASE))
+            has_delay = bool(re.search(r"delay\s*:\s*[-\d.]+", line, re.IGNORECASE))
+            only_offset = has_offset and not has_delay
+            only_delay = has_delay and not has_offset
+            if only_offset or only_delay:
+                keep_tail.append(line + "\n")
+            else:
+                self._file_handle.write(f"[{ts}] {line}\n")
+        self._text_buffer = "\n".join(keep_tail) if keep_tail else ""
+        self._file_handle.flush()
+
+    def _on_data_received(self, data: bytes):
+        self._byte_count += len(data)
+        self.lbl_bytes.setText(f"已接收: {self._byte_count} 字节")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            if self._recording and self._file_handle:
+                self._file_handle.write(f"[{ts}] {data.hex()}\n")
+                self._file_handle.flush()
+            return
+        self._text_buffer += text
+        if self._waiting_trigger:
+            if self._TRIGGER_PATTERN.search(self._text_buffer):
+                self._on_trigger(ts)
+        if self._recording and self._file_handle:
+            self._process_text_buffer(ts)
+
+    def _on_error(self, msg: str):
+        QMessageBox.critical(self, "串口错误", msg)
+        self._close_serial()
 
     def _on_timer_tick(self):
         if not self._recording:
@@ -282,11 +375,11 @@ class MainWindow(QMainWindow):
             return
         self._timer_seconds -= 1
         if self._timer_seconds > 0:
-            self.btn_record.setText(f"停止记录 ({self._timer_seconds}s)")
+            self.btn_start.setText(f"停止 ({self._timer_seconds}s)")
         else:
             if self._timer:
                 self._timer.stop()
-            self._stop_record(write_footer=True)
+            self._close_serial()
 
     def _stop_record(self, write_footer: bool = False):
         # 停止定时器
@@ -306,11 +399,77 @@ class MainWindow(QMainWindow):
         self._record_path = None
         self._record_start_time = None
         self._current_port = None
-        self.btn_record.setText("开始记录")
+        self._text_buffer = ""
 
     def closeEvent(self, event):
         self._close_serial()
         event.accept()
+
+
+class ResultDialog(QDialog):
+    """结果显示对话框。"""
+
+    def __init__(self, offsets, delays, converge_time, file_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("数据处理结果")
+        self.resize(600, 400)
+        
+        layout = QVBoxLayout(self)
+        
+        # 文件信息
+        file_info = f"文件: {Path(file_path).name}"
+        layout.addWidget(QLabel(file_info))
+        
+        # 结果文本
+        results = []
+        
+        # 计算平均值
+        avg_offset = sum(offsets) / len(offsets) if offsets else 0
+        avg_delay = sum(delays) / len(delays) if delays else 0
+        
+        results.append("=" * 50)
+        results.append("数据处理结果")
+        results.append("=" * 50)
+        results.append(f"offset 平均值:     {avg_offset:.6f}")
+        results.append(f"Delay 平均值:      {avg_delay:.6f}")
+        results.append(f"offset 采样数:     {len(offsets)}")
+        results.append(f"Delay 采样数:      {len(delays)}")
+        
+        if converge_time is not None:
+            results.append(f"收敛时间:         {converge_time:.3f} 秒")
+        else:
+            results.append("收敛时间:         未检测到 offset 收敛到 <0.02 的时刻")
+        
+        results.append("=" * 50)
+        results.append("")
+        
+        # 额外统计信息
+        if offsets:
+            min_offset = min(offsets)
+            max_offset = max(offsets)
+            results.append("[ 额外统计 ]")
+            results.append(f"offset 最小值:     {min_offset:.6f}")
+            results.append(f"offset 最大值:     {max_offset:.6f}")
+        
+        if delays:
+            min_delay = min(delays)
+            max_delay = max(delays)
+            results.append(f"Delay 最小值:      {min_delay:.6f}")
+            results.append(f"Delay 最大值:      {max_delay:.6f}")
+        
+        # 显示文本
+        text_display = QTextEdit()
+        text_display.setReadOnly(True)
+        text_display.setText("\n".join(results))
+        layout.addWidget(text_display)
+        
+        # 按钮
+        btn_layout = QHBoxLayout()
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(self.close)
+        btn_layout.addStretch()
+        btn_layout.addWidget(btn_close)
+        layout.addLayout(btn_layout)
 
 
 def main():

@@ -3,15 +3,14 @@
 # 支持 hex（如 01020304 或 01 02 03 04）或普通文本
 # 以 # 开头的行会被忽略
 
-[2026-03-14 15:00:00.000] join NET success
-[2026-03-14 15:00:00.500] Time Slot index: 1 join NET success
-[2026-03-14 15:00:01.000] Time Slot index: 1 client start!
-[2026-03-14 15:00:01.500] 
+join NET success
+Time Slot index: 1 join NET success
+Time Slot index: 1 client start!
 
-[2026-03-14 15:00:02.000] offset:0.0001000  Delay:0.01000001
-[2026-03-14 15:00:02.500] offset:0.0001000  Delay:0.01000001
-[2026-03-14 15:00:03.000] offset:0.0001000  Delay:0.01000001
-[2026-03-14 15:00:03.500] offset:0.0001000  Delay:0.01000001
-[2026-03-14 15:00:04.000] offset:0.0001000  Delay:0.01000001
-[2026-03-14 15:00:04.500] offset:0.0001000  Delay:0.01000001
-[2026-03-14 15:00:05.000] offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001
+offset:0.0001000  Delay:0.01000001

@@ -8,15 +8,25 @@ import re
 from datetime import datetime
 
 def parse_file(filepath):
+    """
+    解析数据文件，提取 offset 和 delay，计算平均值和收敛时间。
+    
+    Args:
+        filepath: 数据文件路径
+    
+    Returns:
+        tuple: (offsets 列表, delays 列表, 收敛时间秒数)
+    """
     offsets = []
     delays = []
     offset_times = []
     start_time = None
     converge_time = None
     offset_converged = False
+    first_data_time = None
     time_pattern = re.compile(r"\[(.*?)\]")
-    offset_pattern = re.compile(r"offset:([\d\.-]+)")
-    delay_pattern = re.compile(r"Delay:([\d\.-]+)")
+    offset_pattern = re.compile(r"offset:([\d\.-]+)", re.IGNORECASE)
+    delay_pattern = re.compile(r"delay:([\d\.-]+)", re.IGNORECASE)
     
     with open(filepath, encoding="utf-8") as f:
         for line in f:
@@ -35,8 +45,8 @@ def parse_file(filepath):
                 start_time = ts
             if start_time is not None and "client start" in line:
                 start_time = ts  # 以 client start 为准
-            # 只处理 offset/Delay 行
-            if "offset:" in line and "Delay:" in line:
+            # 只处理 offset/delay 行（大小写不敏感）
+            if re.search(r"offset:", line, re.I) and re.search(r"delay:", line, re.I):
                 offset_match = offset_pattern.search(line)
                 delay_match = delay_pattern.search(line)
                 if offset_match and delay_match:
@@ -45,9 +55,13 @@ def parse_file(filepath):
                     offsets.append(offset)
                     delays.append(delay)
                     offset_times.append(ts)
+                    if first_data_time is None:
+                        first_data_time = ts
                     # 收敛时间判断
                     if not offset_converged and abs(offset) < 0.02:
-                        converge_time = (ts - start_time).total_seconds() if start_time else None
+                        # 如果没有显式的起点（join/client），使用第一条数据的时间作为起点
+                        origin = start_time if start_time else first_data_time
+                        converge_time = (ts - origin).total_seconds() if origin else None
                         offset_converged = True
     return offsets, delays, converge_time
 
