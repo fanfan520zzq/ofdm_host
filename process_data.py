@@ -7,6 +7,39 @@ import sys
 import re
 from datetime import datetime
 
+
+def trim_head_samples(values, ratio=0.01):
+    """剔除序列头部 ratio 比例样本，保留至少 1 个样本。"""
+    if not values:
+        return [], 0
+    if len(values) == 1:
+        return values[:], 0
+    drop_count = int(len(values) * ratio)
+    drop_count = min(drop_count, len(values) - 1)
+    return values[drop_count:], drop_count
+
+
+def calc_stats_with_trim(values, ratio=0.01):
+    """基于剔除头部毛刺后的样本计算均值与最值。"""
+    trimmed, dropped = trim_head_samples(values, ratio=ratio)
+    if not trimmed:
+        return {
+            "mean": None,
+            "min": None,
+            "max": None,
+            "raw_count": len(values),
+            "used_count": 0,
+            "dropped_count": dropped,
+        }
+    return {
+        "mean": sum(trimmed) / len(trimmed),
+        "min": min(trimmed),
+        "max": max(trimmed),
+        "raw_count": len(values),
+        "used_count": len(trimmed),
+        "dropped_count": dropped,
+    }
+
 def parse_file(filepath):
     """
     解析数据文件，提取 offset 和 delay，计算平均值和收敛时间。
@@ -74,10 +107,23 @@ def main():
     if not offsets or not delays:
         print("未找到有效的 offset/Delay 数据！")
         return
-    avg_offset = sum(offsets) / len(offsets)
-    avg_delay = sum(delays) / len(delays)
-    print(f"offset 平均值: {avg_offset:.6f}")
-    print(f"Delay 平均值: {avg_delay:.6f}")
+    offset_stats = calc_stats_with_trim(offsets, ratio=0.01)
+    delay_stats = calc_stats_with_trim(delays, ratio=0.01)
+
+    print(
+        f"offset 统计样本: 原始 {offset_stats['raw_count']} 条, "
+        f"剔除前 {offset_stats['dropped_count']} 条后使用 {offset_stats['used_count']} 条"
+    )
+    print(
+        f"Delay 统计样本: 原始 {delay_stats['raw_count']} 条, "
+        f"剔除前 {delay_stats['dropped_count']} 条后使用 {delay_stats['used_count']} 条"
+    )
+    print(f"offset 平均值: {offset_stats['mean']:.6f}")
+    print(f"Delay 平均值: {delay_stats['mean']:.6f}")
+    print(f"offset 最小值: {offset_stats['min']:.6f}")
+    print(f"offset 最大值: {offset_stats['max']:.6f}")
+    print(f"Delay 最小值: {delay_stats['min']:.6f}")
+    print(f"Delay 最大值: {delay_stats['max']:.6f}")
     if converge_time is not None:
         print(f"收敛时间: {converge_time:.3f} 秒")
     else:
