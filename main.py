@@ -54,6 +54,7 @@ class MainWindow(QMainWindow):
         self._waiting_trigger = False  # 等待设备就绪信号后开始写入
         self._delay_baseline: float | None = None  # 首个 delay 作为标定基准
         self._auto_save_root_dir: str | None = None
+        self._packet_loss_count: int = 0
 
         self._setup_ui()
         self._refresh_ports()
@@ -134,6 +135,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.lbl_offset)
         self.lbl_delay = QLabel("delay: --")
         layout.addWidget(self.lbl_delay)
+        self.lbl_packet_loss = QLabel("丢包: 0")
+        layout.addWidget(self.lbl_packet_loss)
 
         layout.addStretch()
 
@@ -417,6 +420,8 @@ class MainWindow(QMainWindow):
             self._recording = True
             self._waiting_trigger = False
             self._delay_baseline = None
+            self._packet_loss_count = 0
+            self.lbl_packet_loss.setText("丢包: 0")
             self.lbl_status.setText("状态: 已就绪，正在记录 offset/delay")
 
             # 启动定时器（支持模拟模式）
@@ -485,6 +490,11 @@ class MainWindow(QMainWindow):
             has_delay = bool(re.search(r"delay\s*:\s*[-\d.]+", line, re.IGNORECASE))
             only_offset = has_offset and not has_delay
             only_delay = has_delay and not has_offset
+            if line.strip() == "10":
+                self._packet_loss_count += 1
+                self.lbl_packet_loss.setText(f"丢包: {self._packet_loss_count}")
+                self._file_handle.write(f"[{ts}] PACKET_LOSS: 10\n")
+                continue
             if only_offset or only_delay:
                 keep_tail.append(line + "\n")
             else:
@@ -558,6 +568,8 @@ class MainWindow(QMainWindow):
         self._current_port = None
         self._text_buffer = ""
         self._delay_baseline = None
+        self._packet_loss_count = 0
+        self.lbl_packet_loss.setText("丢包: 0")
 
     def closeEvent(self, event):
         self._close_serial(manual_stop=False)
