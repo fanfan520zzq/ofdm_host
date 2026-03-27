@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self._timer: QTimer | None = None
         self._timer_seconds: int = 0
         self._text_buffer = ""  # 用于解析 offset/delay 对
+        self._live_text_buffer = ""  # 用于实时显示完整文本行
         self._waiting_trigger = False  # 等待设备就绪信号后开始写入
         self._delay_baseline: float | None = None  # 首个 delay 作为标定基准
         self._auto_save_root_dir: str | None = None
@@ -137,6 +138,14 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.lbl_delay)
         self.lbl_packet_loss = QLabel("丢包: 0")
         layout.addWidget(self.lbl_packet_loss)
+
+        layout.addWidget(QLabel("实时数据:"))
+        self.live_data_view = QTextEdit()
+        self.live_data_view.setReadOnly(True)
+        self.live_data_view.setPlaceholderText("串口接收数据将实时显示在这里")
+        self.live_data_view.setMinimumHeight(160)
+        self.live_data_view.document().setMaximumBlockCount(400)
+        layout.addWidget(self.live_data_view)
 
         layout.addStretch()
 
@@ -309,8 +318,27 @@ class MainWindow(QMainWindow):
     def _on_connected(self):
         if self._simulate_mode:
             self.lbl_status.setText("状态: 模拟串口已连接，等待设备就绪...")
+            self._append_live_line("系统", "模拟串口已连接，等待设备就绪")
         else:
             self.lbl_status.setText("状态: 已连接，等待设备就绪...")
+            self._append_live_line("系统", "串口已连接，等待设备就绪")
+
+    def _append_live_line(self, tag: str, content: str, ts: str | None = None) -> None:
+        if not content:
+            return
+        if ts is None:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        self.live_data_view.append(f"[{ts}] {tag}: {content}")
+
+    def _feed_live_text(self, text: str, ts: str) -> None:
+        """将接收到的文本按完整行实时写入显示框。"""
+        self._live_text_buffer += text
+        lines = self._live_text_buffer.split("\n")
+        self._live_text_buffer = lines.pop() if lines else ""
+        for line in lines:
+            line = line.strip("\r")
+            if line:
+                self._append_live_line("RX", line, ts=ts)
 
     def _close_serial(self, manual_stop: bool = False):
         closed_record_path = self._record_path if self._recording else None
@@ -423,6 +451,7 @@ class MainWindow(QMainWindow):
             self._packet_loss_count = 0
             self.lbl_packet_loss.setText("丢包: 0")
             self.lbl_status.setText("状态: 已就绪，正在记录 offset/delay")
+            self._append_live_line("系统", f"设备就绪，开始记录。设备={self._current_port} 波特率={baud}", ts=ts)
 
             # 启动定时器（支持模拟模式）
             if self.timer_spin.value() > 0:
@@ -474,6 +503,7 @@ class MainWindow(QMainWindow):
             self._file_handle.write(f"[{ts}] offset:{off_val}  delay:{delay_out}\n")
             self.lbl_offset.setText(f"offset: {off_val}")
             self.lbl_delay.setText(f"delay: {delay_out}")
+            self._append_live_line("解析", f"offset:{off_val}  delay:{delay_out}", ts=ts)
             pos = m.end()
         remain = buf[pos:] if pos < len(buf) else ""
         lines = remain.split("\n")
@@ -494,11 +524,13 @@ class MainWindow(QMainWindow):
                 self._packet_loss_count += 1
                 self.lbl_packet_loss.setText(f"丢包: {self._packet_loss_count}")
                 self._file_handle.write(f"[{ts}] PACKET_LOSS: 10\n")
+                self._append_live_line("告警", "PACKET_LOSS: 10", ts=ts)
                 continue
             if only_offset or only_delay:
                 keep_tail.append(line + "\n")
             else:
                 self._file_handle.write(f"[{ts}] {line}\n")
+                self._append_live_line("RX", line, ts=ts)
         self._text_buffer = "\n".join(keep_tail) if keep_tail else ""
         self._file_handle.flush()
 
@@ -516,10 +548,12 @@ class MainWindow(QMainWindow):
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
+            self._append_live_line("HEX", data.hex(), ts=ts)
             if self._recording and self._file_handle:
                 self._file_handle.write(f"[{ts}] {data.hex()}\n")
                 self._file_handle.flush()
             return
+        self._feed_live_text(text, ts)
         self._text_buffer += text
         if self._waiting_trigger:
             if self._TRIGGER_PATTERN.search(self._text_buffer):
@@ -567,6 +601,7 @@ class MainWindow(QMainWindow):
         self._record_start_time = None
         self._current_port = None
         self._text_buffer = ""
+        self._live_text_buffer = ""
         self._delay_baseline = None
         self._packet_loss_count = 0
         self.lbl_packet_loss.setText("丢包: 0")
