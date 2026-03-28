@@ -77,10 +77,12 @@ flutter run -d windows
 - 查看实时事件流和最新 offset/delay/丢包指标
 - 查看实时 offset/delay 双波形与均值/最值统计
 - 切换波形时间窗并调整 Y 轴缩放倍率
+- 切换波形自动量程 / 固定量程策略
 - 按关键词过滤日志（便于高流量调试）
 - 对过滤日志中的关键词做高亮显示
 - 对 `historydata/*.txt` 执行离线统计分析（trim + converge_time）
 - 导出离线分析结果（TXT / JSON，默认输出到 `analysis_exports/`）
+- 可在界面中自定义离线分析导出目录
 
 ## 自动版本留痕（每次大改）
 

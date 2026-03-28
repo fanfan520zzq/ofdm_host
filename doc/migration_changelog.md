@@ -77,3 +77,16 @@
   - doc/README.md
   - doc/migration_progress.md
   - doc/migration_plan_vibecoding.md
+
+## v0.6.2
+- 时间: 2026-03-28 22:19:07
+- 阶段: phase-3-step3
+- 说明: phase3 configurable export path and scale mode
+- 文件:
+  - flutter_ui/lib/src/app.dart
+  - flutter_ui/test/widget_test.dart
+  - flutter_ui/README.md
+  - README.md
+  - doc/README.md
+  - doc/migration_progress.md
+  - doc/migration_plan_vibecoding.md

@@ -9,6 +9,11 @@ import 'package:google_fonts/google_fonts.dart';
 import 'core_service_client.dart';
 import 'models.dart';
 
+enum _WaveScaleMode {
+  auto,
+  fixed,
+}
+
 class OfdmHostApp extends StatelessWidget {
   const OfdmHostApp({super.key});
 
@@ -59,6 +64,8 @@ class _HomePageState extends State<_HomePage> {
   final TextEditingController _recordNoteController =
       TextEditingController(text: 'phase3 flutter ui run');
   final TextEditingController _analysisFileController = TextEditingController();
+    final TextEditingController _exportDirController =
+      TextEditingController(text: 'analysis_exports');
   final TextEditingController _logFilterController = TextEditingController();
 
   final List<String> _logLines = <String>[];
@@ -86,6 +93,8 @@ class _HomePageState extends State<_HomePage> {
   double _analysisTrimRatio = 0.01;
   int _waveWindowPoints = _defaultWaveWindowPoints;
   double _waveZoomY = 1.0;
+  _WaveScaleMode _waveScaleMode = _WaveScaleMode.auto;
+  double _waveFixedHalfRange = 0.02;
   double? _lastOffset;
   double? _lastDelay;
   String? _analysisExportPath;
@@ -105,6 +114,7 @@ class _HomePageState extends State<_HomePage> {
     _recordRootController.dispose();
     _recordNoteController.dispose();
     _analysisFileController.dispose();
+    _exportDirController.dispose();
     _logFilterController.dispose();
     super.dispose();
   }
@@ -466,7 +476,7 @@ class _HomePageState extends State<_HomePage> {
     }
 
     try {
-      final dir = Directory('analysis_exports');
+      final dir = Directory(_resolveExportDirPath());
       await dir.create(recursive: true);
 
       final ts = _safeFileTimestamp(DateTime.now());
@@ -495,7 +505,7 @@ class _HomePageState extends State<_HomePage> {
     }
 
     try {
-      final dir = Directory('analysis_exports');
+      final dir = Directory(_resolveExportDirPath());
       await dir.create(recursive: true);
 
       final ts = _safeFileTimestamp(DateTime.now());
@@ -549,6 +559,14 @@ class _HomePageState extends State<_HomePage> {
         .toIso8601String()
         .replaceAll(':', '-')
         .replaceAll('.', '-');
+  }
+
+  String _resolveExportDirPath() {
+    final configured = _exportDirController.text.trim();
+    if (configured.isEmpty) {
+      return 'analysis_exports';
+    }
+    return configured;
   }
 
   TextSpan _buildHighlightedSpan({
@@ -931,6 +949,14 @@ class _HomePageState extends State<_HomePage> {
               ),
             ),
             const SizedBox(height: 8),
+            TextField(
+              controller: _exportDirController,
+              decoration: const InputDecoration(
+                labelText: '导出目录',
+                hintText: 'analysis_exports 或绝对路径',
+              ),
+            ),
+            const SizedBox(height: 8),
             Text(_analysisHint, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 8),
             _buildAnalysisResultCard(),
@@ -1022,6 +1048,7 @@ class _HomePageState extends State<_HomePage> {
     final delayView = _tailPoints(_delaySeries);
     final offsetStats = _calcStats(offsetView);
     final delayStats = _calcStats(delayView);
+    final useFixedRange = _waveScaleMode == _WaveScaleMode.fixed;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1098,6 +1125,61 @@ class _HomePageState extends State<_HomePage> {
               ),
             ],
           ),
+          Row(
+            children: <Widget>[
+              SegmentedButton<_WaveScaleMode>(
+                segments: const <ButtonSegment<_WaveScaleMode>>[
+                  ButtonSegment<_WaveScaleMode>(
+                    value: _WaveScaleMode.auto,
+                    icon: Icon(Icons.auto_graph),
+                    label: Text('自动量程'),
+                  ),
+                  ButtonSegment<_WaveScaleMode>(
+                    value: _WaveScaleMode.fixed,
+                    icon: Icon(Icons.straighten),
+                    label: Text('固定量程'),
+                  ),
+                ],
+                selected: <_WaveScaleMode>{_waveScaleMode},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _waveScaleMode = selection.first;
+                  });
+                },
+              ),
+              const SizedBox(width: 8),
+              Text(
+                useFixedRange
+                    ? '±${_waveFixedHalfRange.toStringAsFixed(4)}'
+                    : '按数据自适应',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+          if (useFixedRange)
+            Row(
+              children: <Widget>[
+                Text(
+                  '固定量程 ${_waveFixedHalfRange.toStringAsFixed(4)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Slider(
+                    value: _waveFixedHalfRange,
+                    min: 0.001,
+                    max: 0.2,
+                    divisions: 199,
+                    label: _waveFixedHalfRange.toStringAsFixed(4),
+                    onChanged: (value) {
+                      setState(() {
+                        _waveFixedHalfRange = value;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
           const SizedBox(height: 10),
           Expanded(
             child: Row(
@@ -1109,6 +1191,8 @@ class _HomePageState extends State<_HomePage> {
                     color: const Color(0xFF146EB4),
                     stats: offsetStats,
                     amplitudeScale: _waveZoomY,
+                    useFixedRange: useFixedRange,
+                    fixedHalfRange: _waveFixedHalfRange,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -1119,6 +1203,8 @@ class _HomePageState extends State<_HomePage> {
                     color: const Color(0xFFE36F2D),
                     stats: delayStats,
                     amplitudeScale: _waveZoomY,
+                    useFixedRange: useFixedRange,
+                    fixedHalfRange: _waveFixedHalfRange,
                   ),
                 ),
               ],
@@ -1135,6 +1221,8 @@ class _HomePageState extends State<_HomePage> {
     required Color color,
     required _SeriesStats? stats,
     required double amplitudeScale,
+    required bool useFixedRange,
+    required double fixedHalfRange,
   }) {
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1159,6 +1247,8 @@ class _HomePageState extends State<_HomePage> {
                 lineColor: color,
                 emptyHint: '等待 $title 数据',
                 amplitudeScale: amplitudeScale,
+                useFixedRange: useFixedRange,
+                fixedHalfRange: fixedHalfRange,
               ),
               child: const SizedBox.expand(),
             ),
@@ -1306,12 +1396,16 @@ class _WaveformPainter extends CustomPainter {
     required this.lineColor,
     required this.emptyHint,
     required this.amplitudeScale,
+    required this.useFixedRange,
+    required this.fixedHalfRange,
   });
 
   final List<double> values;
   final Color lineColor;
   final String emptyHint;
   final double amplitudeScale;
+  final bool useFixedRange;
+  final double fixedHalfRange;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1360,7 +1454,10 @@ class _WaveformPainter extends CustomPainter {
     for (final v in values) {
       maxAbs = math.max(maxAbs, v.abs());
     }
-    final displayAbs = math.max(0.000001, maxAbs / amplitudeScale);
+    final baseAbs = useFixedRange
+        ? math.max(0.000001, fixedHalfRange)
+        : maxAbs;
+    final displayAbs = math.max(0.000001, baseAbs / amplitudeScale);
 
     final sampled = <double>[];
     final targetCount = plot.width.clamp(2, 800).toInt();
@@ -1402,6 +1499,8 @@ class _WaveformPainter extends CustomPainter {
     return oldDelegate.values != values ||
         oldDelegate.lineColor != lineColor ||
         oldDelegate.emptyHint != emptyHint ||
-        oldDelegate.amplitudeScale != amplitudeScale;
+        oldDelegate.amplitudeScale != amplitudeScale ||
+        oldDelegate.useFixedRange != useFixedRange ||
+        oldDelegate.fixedHalfRange != fixedHalfRange;
   }
 }
