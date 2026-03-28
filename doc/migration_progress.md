@@ -18,7 +18,7 @@
 - [x] 新增 `doc/ipc_protocol_v1.md`
 - [x] 支持 `app.init` / `app.ping` / `serial.list_ports` / `app.shutdown`
 - [x] 支持 `app.heartbeat` 服务端主动心跳
-- [ ] Flutter 端 PoC 接入（待下一步）
+- [x] Flutter 端 PoC 接入（已创建 `flutter_ui/` 壳工程）
 
 ## 下一步（阶段 2）
 1. 在 Python Core 中接入 `serial.open/close`（已完成）
@@ -33,3 +33,4 @@
 - 新增触发事件：`trigger.detected`
 - 新增指标事件：`metric.offset_delay`、`metric.packet_loss`
 - `record.start`/`record.stop` 目前返回 `NOT_IMPLEMENTED`（下一步接入落盘）
+- 新增 Flutter 前端壳工程（`flutter_ui/`）：连接控制 + 实时事件流 + 指标卡片

@@ -25,3 +25,13 @@
   - doc/ipc_protocol_v1.md
   - doc/migration_progress.md
   - doc/migration_plan_vibecoding.md
+
+## v0.4.0
+- 时间: 2026-03-28 11:33:08
+- 阶段: phase-2-ui-shell
+- 说明: flutter ui shell scaffold and README sync
+- 文件:
+  - flutter_ui
+  - README.md
+  - doc/README.md
+  - doc/migration_progress.md

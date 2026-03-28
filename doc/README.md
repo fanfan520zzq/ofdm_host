@@ -21,44 +21,32 @@
 
 ## 迁移进展（通俗版）
 
-我们正在把程序升级成“两层结构”：
-- 前台界面：负责操作和显示
-- 后台服务：负责串口采集、解析和数据保存
+项目正在进行升级：把程序拆成“前台界面 + 后台服务”两部分。
+
+这样做的好处是：后续界面迭代更快，但底层采集能力继续复用，不需要推翻重写。
 
 目标再次确认：
-- 前端 UI：使用 Flutter，让上位机界面更现代、更清晰
-- 后端能力：继续使用 Python 串口 + Python 算法（不改核心算法栈）
-
-这次升级的目标是后续更容易扩展新界面，但不影响现在的采集流程。
+- 前端：使用 Flutter 做更好看的上位机界面
+- 后端：保留 Python 串口采集和 Python 算法
 
 当前进度：
-- 新增后台服务入口：`core_service.py`
-- 已能完成启动确认、串口列表查询、心跳保活、正常关闭
-- 已进入 Phase 2，新增 `serial.open/close` 和实时事件流
+- 已新增后台服务入口：`core_service.py`
+- 已打通启动确认、串口列表、心跳、正常关闭
+- 已进入 Phase 2，新增串口开关与实时事件流
 - 已创建 Flutter 前端壳工程：`flutter_ui/`
-- 现有主程序 `main.py` 仍可按原方式使用
+- 现在仍可继续使用原有主程序 `main.py` 进行采集
 
-迁移状态查看位置：
+迁移状态查看：
 - 当前迁移版本：`MIGRATION_VERSION`
 - 每次变更记录：`doc/migration_changelog.md`
 - 阶段进度看板：`doc/migration_progress.md`
-- 协议细节（给开发同学）：`doc/ipc_protocol_v1.md`
 
-## 如果你只关心日常使用
+## 如果你只是使用者
 
 - 继续运行：`python main.py`
-- 现有采集、保存、离线分析流程不变
-- 历史文件仍在 `historydata/` 下
+- 当前采集与分析流程保持不变
 
-## 如果你参与联调测试
-
-可单独启动后台服务（用于新界面对接验证）：
-
-```bash
-python core_service.py
-```
-
-Flutter 前端壳工程（Phase 2）启动方式：
+## 如果你参与迁移联调
 
 ```bash
 cd flutter_ui
@@ -67,17 +55,11 @@ flutter pub get
 flutter run -d windows
 ```
 
-说明：当前仓库已提供 Flutter 代码骨架；若本机未安装 Flutter SDK，请先安装 Flutter。
+如果提示没有 `flutter` 命令，说明本机还未安装 Flutter SDK。
 
 ## 自动版本留痕（每次大改）
 
-项目已配置自动留痕脚本：`tools/migration_checkpoint.py`。
-
-每次阶段性大改后，它会自动做 4 件事：
-- 升级迁移版本号（`MIGRATION_VERSION`）
-- 追加变更记录（`doc/migration_changelog.md`）
-- 创建一次 git 提交
-- 打一个迁移标签（例如 `migration-v0.2.0`）
+项目已提供自动留痕脚本：`tools/migration_checkpoint.py`，每次阶段性改动后可自动记录版本、变更、提交和标签。
 
 ## 打包 EXE（Windows）
 
