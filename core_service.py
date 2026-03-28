@@ -1,6 +1,6 @@
 """OFDM Host Python core service.
 
-Phase 1/2 migration target:
+Phase 1/2/3 migration target:
 - Keep legacy acquisition/parsing logic in Python
 - Expose a stable JSON Lines IPC protocol for Flutter desktop UI
 
@@ -26,9 +26,11 @@ from typing import Any
 import serial
 from serial.tools import list_ports
 
+from process_data import calc_stats_with_trim, parse_file
+
 PROTOCOL_VERSION = "1.0.0"
 SERVICE_NAME = "ofdm-host-core"
-SERVICE_VERSION = "0.3.0"
+SERVICE_VERSION = "0.4.0"
 DEFAULT_HEARTBEAT_SECONDS = 5.0
 
 TRIGGER_PATTERN = re.compile(
@@ -221,6 +223,24 @@ class CoreService:
         if not root.is_absolute():
             root = Path(__file__).parent / root
         return root
+
+    @staticmethod
+    def _parse_trim_ratio(value: Any) -> float:
+        if value is None:
+            return 0.01
+
+        try:
+            ratio = float(value)
+        except (TypeError, ValueError):
+            raise ValueError("field 'trim_ratio' must be a numeric value")
+
+        if ratio > 1 and ratio <= 100:
+            ratio = ratio / 100.0
+
+        if ratio < 0 or ratio >= 1:
+            raise ValueError("field 'trim_ratio' must be in range [0, 1)")
+
+        return ratio
 
     @staticmethod
     def _parse_simulate_line(line: str) -> bytes | None:
@@ -735,6 +755,55 @@ class CoreService:
         if not stopped:
             self._emit_error(req.req_id, "RECORD_NOT_ACTIVE", "no active record session")
 
+    def _handle_file_process(self, req: Request) -> None:
+        file_path_raw = req.payload.get("file_path")
+        if not isinstance(file_path_raw, str) or not file_path_raw.strip():
+            raise ValueError("field 'file_path' is required and must be a non-empty string")
+
+        file_path = Path(file_path_raw)
+        if not file_path.is_absolute():
+            file_path = Path(__file__).parent / file_path
+
+        if not file_path.exists():
+            self._emit_error(req.req_id, "FILE_NOT_FOUND", str(file_path))
+            return
+
+        trim_ratio = self._parse_trim_ratio(req.payload.get("trim_ratio"))
+
+        try:
+            offsets, delays, converge_time = parse_file(str(file_path))
+        except Exception as exc:
+            self._emit_error(req.req_id, "PROCESS_FAILED", str(exc))
+            return
+
+        if not offsets or not delays:
+            self._emit(
+                "process.result",
+                req_id=req.req_id,
+                payload={
+                    "file_path": str(file_path),
+                    "trim_ratio": trim_ratio,
+                    "has_data": False,
+                    "message": "未找到有效 offset/delay 数据",
+                },
+            )
+            return
+
+        offset_stats = calc_stats_with_trim(offsets, ratio=trim_ratio)
+        delay_stats = calc_stats_with_trim(delays, ratio=trim_ratio)
+        self._emit(
+            "process.result",
+            req_id=req.req_id,
+            payload={
+                "file_path": str(file_path),
+                "trim_ratio": trim_ratio,
+                "has_data": True,
+                "converge_time": converge_time,
+                "offset_stats": offset_stats,
+                "delay_stats": delay_stats,
+            },
+        )
+
     def _handle_request(self, req: Request) -> None:
         if req.req_type == "app.init":
             self._emit("app.ready", req_id=req.req_id, payload=self._build_app_meta())
@@ -762,6 +831,10 @@ class CoreService:
 
         if req.req_type == "record.stop":
             self._handle_record_stop(req)
+            return
+
+        if req.req_type == "file.process":
+            self._handle_file_process(req)
             return
 
         if req.req_type == "app.shutdown":

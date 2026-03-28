@@ -1,9 +1,12 @@
-# Flutter UI Shell（Phase 2）
+# Flutter UI Shell（Phase 3-Start）
 
 这是 OFDM Host 的 Flutter 前端壳工程（迁移中的 UI 层）。
 
 当前状态：
-- 已有桌面界面骨架（连接控制 + 记录控制 + 实时事件流）
+- 已有桌面界面（连接控制 + 记录控制 + 实时事件流）
+- 已支持 offset/delay 双波形与统计卡片（mean/min/max）
+- 已支持日志关键词过滤
+- 已支持离线文件分析（file.process -> process.result）
 - 已可对接 Python `core_service.py`
 - 后端串口和算法仍由 Python 负责
 
@@ -43,6 +46,6 @@ flutter run -d windows
 
 ## 说明
 
-- 这是 Phase 2 的 UI 完成版，已具备串口采集闭环控制。
+- 这是 Phase 3 的启动版，已具备实时可视化与离线分析入口。
 - 界面可直接触发 `record.start` / `record.stop`，并展示记录文件路径。
-- 后续会继续补齐波形、统计结果页、日志筛选等能力。
+- 后续将继续补齐结果导出、波形缩放和日志高亮能力。

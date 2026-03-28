@@ -35,6 +35,7 @@
 - 新增后台服务入口：`core_service.py`
 - 已能完成启动确认、串口列表查询、心跳保活、正常关闭
 - Phase 2 已完成：支持 `serial.open/close`、实时事件流、`record.start/stop` 记录落盘
+- Phase 3 已启动：支持实时 offset/delay 双波形、日志过滤、历史文件离线分析
 - 已创建 Flutter 前端壳工程：`flutter_ui/`
 - 现有主程序 `main.py` 仍可按原方式使用
 
@@ -58,7 +59,7 @@
 python core_service.py
 ```
 
-Flutter 前端壳工程（Phase 2）启动方式：
+Flutter 前端壳工程（Phase 3-Start）启动方式：
 
 ```bash
 cd flutter_ui
@@ -74,6 +75,9 @@ flutter run -d windows
 - 打开/关闭串口（真实或模拟）
 - 开始/停止记录（支持“等待触发后再写文件”）
 - 查看实时事件流和最新 offset/delay/丢包指标
+- 查看实时 offset/delay 双波形与均值/最值统计
+- 按关键词过滤日志（便于高流量调试）
+- 对 `historydata/*.txt` 执行离线统计分析（trim + converge_time）
 
 ## 自动版本留痕（每次大改）
 

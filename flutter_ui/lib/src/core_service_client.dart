@@ -139,6 +139,19 @@ class CoreServiceClient {
 
   String stopRecord() => send(type: 'record.stop', payload: <String, dynamic>{});
 
+  String processFile({
+    required String filePath,
+    double trimRatio = 0.01,
+  }) {
+    return send(
+      type: 'file.process',
+      payload: <String, dynamic>{
+        'file_path': filePath,
+        'trim_ratio': trimRatio,
+      },
+    );
+  }
+
   void _handleStdoutLine(String line) {
     if (line.trim().isEmpty) {
       return;

@@ -14,7 +14,7 @@
 - `code`: 错误码（仅 error）
 - `message`: 错误描述（仅 error）
 
-## 2. 已实现请求（Phase 1 + Phase 2）
+## 2. 已实现请求（Phase 1 + Phase 2 + Phase 3-Start）
 
 ### 2.1 app.init
 请求：
@@ -23,7 +23,7 @@
 ```
 响应：
 ```json
-{"id":"1","type":"app.ready","ts":1710000000000,"payload":{"service":"ofdm-host-core","service_version":"0.1.0","protocol_version":"1.0.0"}}
+{"id":"1","type":"app.ready","ts":1710000000000,"payload":{"service":"ofdm-host-core","service_version":"0.4.0","protocol_version":"1.0.0"}}
 ```
 
 ### 2.2 app.ping
@@ -33,7 +33,7 @@
 ```
 响应：
 ```json
-{"id":"2","type":"app.pong","ts":1710000000001,"payload":{"service":"ofdm-host-core","service_version":"0.1.0","protocol_version":"1.0.0"}}
+{"id":"2","type":"app.pong","ts":1710000000001,"payload":{"service":"ofdm-host-core","service_version":"0.4.0","protocol_version":"1.0.0"}}
 ```
 
 ### 2.3 serial.list_ports
@@ -100,12 +100,26 @@
 {"id":"9","type":"record.stopped","ts":1710000000007,"payload":{"reason":"stopped by request","active":true,"parsed_path":"C:/repo/historydata/2026-03-28_11-41-20.txt","raw_path":"C:/repo/historydata/srcdata/2026-03-28_11-41-20.txt","records_written":120}}
 ```
 
+### 2.9 file.process
+请求（对历史文件做离线统计）：
+```json
+{"id":"10","type":"file.process","payload":{"file_path":"historydata/2026-03-14_16-05-21.txt","trim_ratio":0.01}}
+```
+响应（有数据）：
+```json
+{"id":"10","type":"process.result","ts":1710000000008,"payload":{"file_path":"C:/repo/historydata/2026-03-14_16-05-21.txt","trim_ratio":0.01,"has_data":true,"converge_time":3.245,"offset_stats":{"mean":0.000123,"min":-0.000321,"max":0.000456},"delay_stats":{"mean":0.001001,"min":0.0,"max":0.0019}}}
+```
+响应（无有效数据）：
+```json
+{"id":"10","type":"process.result","ts":1710000000008,"payload":{"file_path":"C:/repo/historydata/2026-03-14_16-05-21.txt","trim_ratio":0.01,"has_data":false,"message":"未找到有效 offset/delay 数据"}}
+```
+
 ## 3. 服务端主动事件
 
 ### 3.1 app.ready
 服务启动后主动发送一次：
 ```json
-{"id":null,"type":"app.ready","ts":1710000000000,"payload":{"service":"ofdm-host-core","service_version":"0.1.0","protocol_version":"1.0.0"}}
+{"id":null,"type":"app.ready","ts":1710000000000,"payload":{"service":"ofdm-host-core","service_version":"0.4.0","protocol_version":"1.0.0"}}
 ```
 
 ### 3.2 app.heartbeat
@@ -162,6 +176,12 @@
 {"id":"9","type":"record.stopped","ts":1710000005800,"payload":{"reason":"stopped by request","active":true,"parsed_path":"C:/repo/historydata/2026-03-28_11-41-20.txt","raw_path":"C:/repo/historydata/srcdata/2026-03-28_11-41-20.txt","records_written":120}}
 ```
 
+### 3.11 process.result
+收到 `file.process` 后发出（同请求响应体结构）：
+```json
+{"id":"10","type":"process.result","ts":1710000005900,"payload":{"file_path":"C:/repo/historydata/2026-03-14_16-05-21.txt","trim_ratio":0.01,"has_data":true,"converge_time":3.245,"offset_stats":{"mean":0.000123,"min":-0.000321,"max":0.000456},"delay_stats":{"mean":0.001001,"min":0.0,"max":0.0019}}}
+```
+
 ## 4. 错误响应
 统一错误类型：`type = "error"`
 
@@ -186,9 +206,11 @@
 - `RECORD_NOT_ACTIVE`: 停止记录时没有活动会话
 - `RECORD_OPEN_FAILED`: 创建记录文件失败
 - `RECORD_WRITE_FAILED`: 记录文件写入失败
+- `FILE_NOT_FOUND`: `file.process` 的目标文件不存在
+- `PROCESS_FAILED`: 离线处理阶段异常
 
-## 5. 下一阶段扩展（Phase 2）
-已实现：
+## 5. 当前扩展状态（截至 Phase 3-Start）
+已实现能力：
 - `serial.open`
 - `serial.close`
 - `serial.connected`
@@ -203,7 +225,10 @@
 - `record.armed`
 - `record.started`
 - `record.stopped`
+- `file.process`
+- `process.result`
 
 完成说明：
 - 已具备触发后记录 + stop 落盘的完整闭环
 - 输出 parsed 与 raw 双文件结构（`historydata/` + `historydata/srcdata/`）
+- 已支持历史文件离线统计（trim + mean/min/max + converge_time）

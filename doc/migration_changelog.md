@@ -50,3 +50,18 @@
   - doc/ipc_protocol_v1.md
   - doc/migration_progress.md
   - doc/migration_plan_vibecoding.md
+
+## v0.6.0
+- 时间: 2026-03-28 22:01:51
+- 阶段: phase-3-start
+- 说明: phase3 visualization and file processing bridge
+- 文件:
+  - core_service.py
+  - flutter_ui/lib/src/core_service_client.dart
+  - flutter_ui/lib/src/app.dart
+  - flutter_ui/README.md
+  - README.md
+  - doc/README.md
+  - doc/ipc_protocol_v1.md
+  - doc/migration_progress.md
+  - doc/migration_plan_vibecoding.md
