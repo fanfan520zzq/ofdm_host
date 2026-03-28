@@ -35,3 +35,18 @@
   - README.md
   - doc/README.md
   - doc/migration_progress.md
+
+## v0.5.0
+- 时间: 2026-03-28 11:44:15
+- 阶段: phase-2-complete
+- 说明: record start-stop persistence and env audit
+- 文件:
+  - core_service.py
+  - flutter_ui/lib/src/core_service_client.dart
+  - flutter_ui/lib/src/app.dart
+  - flutter_ui/README.md
+  - README.md
+  - doc/README.md
+  - doc/ipc_protocol_v1.md
+  - doc/migration_progress.md
+  - doc/migration_plan_vibecoding.md

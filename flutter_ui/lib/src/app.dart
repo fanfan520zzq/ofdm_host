@@ -47,6 +47,10 @@ class _HomePageState extends State<_HomePage> {
       TextEditingController(text: '../core_service.py');
   final TextEditingController _simulatePathController =
       TextEditingController(text: '../simulate_input.txt');
+    final TextEditingController _recordRootController =
+        TextEditingController(text: '.');
+    final TextEditingController _recordNoteController =
+      TextEditingController(text: 'phase2 flutter ui run');
 
   final List<String> _logLines = <String>[];
   final List<String> _ports = <String>[];
@@ -57,7 +61,12 @@ class _HomePageState extends State<_HomePage> {
   bool _serviceRunning = false;
   bool _serialConnected = false;
   bool _simulateMode = true;
+  bool _recordWaitTrigger = true;
+  bool _recordArmed = false;
+  bool _recording = false;
   String? _selectedPort;
+  String? _recordParsedPath;
+  String? _recordRawPath;
   int _packetLoss = 0;
   double? _lastOffset;
   double? _lastDelay;
@@ -71,6 +80,8 @@ class _HomePageState extends State<_HomePage> {
     _pythonPathController.dispose();
     _coreScriptController.dispose();
     _simulatePathController.dispose();
+    _recordRootController.dispose();
+    _recordNoteController.dispose();
     super.dispose();
   }
 
@@ -103,6 +114,8 @@ class _HomePageState extends State<_HomePage> {
     setState(() {
       _serviceRunning = false;
       _serialConnected = false;
+      _recordArmed = false;
+      _recording = false;
       _statusText = '服务已停止';
     });
   }
@@ -141,6 +154,28 @@ class _HomePageState extends State<_HomePage> {
       return;
     }
     _client.listPorts();
+  }
+
+  void _toggleRecord() {
+    if (!_serviceRunning) {
+      _appendLog('请先启动服务');
+      return;
+    }
+    if (!_serialConnected) {
+      _appendLog('请先打开串口');
+      return;
+    }
+
+    if (_recordArmed || _recording) {
+      _client.stopRecord();
+      return;
+    }
+
+    _client.startRecord(
+      waitTrigger: _recordWaitTrigger,
+      rootDir: _recordRootController.text.trim(),
+      note: _recordNoteController.text.trim(),
+    );
   }
 
   void _onEvent(CoreEvent event) {
@@ -182,7 +217,37 @@ class _HomePageState extends State<_HomePage> {
       case 'serial.disconnected':
         setState(() {
           _serialConnected = false;
+          _recordArmed = false;
+          _recording = false;
           _statusText = '串口已断开';
+        });
+        break;
+
+      case 'record.armed':
+        setState(() {
+          _recordArmed = true;
+          _recording = false;
+          _statusText = '记录已就绪，等待触发';
+        });
+        break;
+
+      case 'record.started':
+        setState(() {
+          _recordArmed = false;
+          _recording = true;
+          _recordParsedPath = event.payload['parsed_path']?.toString();
+          _recordRawPath = event.payload['raw_path']?.toString();
+          _statusText = '记录中';
+        });
+        break;
+
+      case 'record.stopped':
+        setState(() {
+          _recordArmed = false;
+          _recording = false;
+          _recordParsedPath = event.payload['parsed_path']?.toString();
+          _recordRawPath = event.payload['raw_path']?.toString();
+          _statusText = '记录已停止';
         });
         break;
 
@@ -462,6 +527,40 @@ class _HomePageState extends State<_HomePage> {
             ],
           ),
           const SizedBox(height: 8),
+          TextField(
+            controller: _recordRootController,
+            decoration: const InputDecoration(
+              labelText: '记录根目录（会生成 historydata）',
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _recordNoteController,
+            decoration: const InputDecoration(
+              labelText: '记录备注（可选）',
+            ),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('等待触发词后开始记录'),
+            value: _recordWaitTrigger,
+            onChanged: (value) {
+              setState(() {
+                _recordWaitTrigger = value;
+              });
+            },
+          ),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.tonal(
+              onPressed: _toggleRecord,
+              child: Text(
+                (_recordArmed || _recording) ? '停止记录' : '开始记录',
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
           SizedBox(
             width: double.infinity,
             child: OutlinedButton(
@@ -474,6 +573,29 @@ class _HomePageState extends State<_HomePage> {
             '当前串口数量: ${_ports.length}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          const SizedBox(height: 6),
+          Text(
+            '记录状态: ${_recording ? 'recording' : (_recordArmed ? 'armed' : 'idle')}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (_recordParsedPath != null) ...<Widget>[
+            const SizedBox(height: 6),
+            Text(
+              'parsed: $_recordParsedPath',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+          if (_recordRawPath != null) ...<Widget>[
+            const SizedBox(height: 4),
+            Text(
+              'raw: $_recordRawPath',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
         ],
       ),
     );

@@ -34,7 +34,7 @@
 当前进度：
 - 新增后台服务入口：`core_service.py`
 - 已能完成启动确认、串口列表查询、心跳保活、正常关闭
-- 已进入 Phase 2，新增 `serial.open/close` 和实时事件流
+- Phase 2 已完成：支持 `serial.open/close`、实时事件流、`record.start/stop` 记录落盘
 - 已创建 Flutter 前端壳工程：`flutter_ui/`
 - 现有主程序 `main.py` 仍可按原方式使用
 
@@ -68,6 +68,12 @@ flutter run -d windows
 ```
 
 说明：当前仓库已提供 Flutter 代码骨架；若本机未安装 Flutter SDK，请先安装 Flutter。
+
+联调时可在 Flutter 界面直接操作：
+- 启动/停止 Python Core Service
+- 打开/关闭串口（真实或模拟）
+- 开始/停止记录（支持“等待触发后再写文件”）
+- 查看实时事件流和最新 offset/delay/丢包指标
 
 ## 自动版本留痕（每次大改）
 

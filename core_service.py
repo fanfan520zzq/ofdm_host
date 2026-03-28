@@ -19,6 +19,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ from serial.tools import list_ports
 
 PROTOCOL_VERSION = "1.0.0"
 SERVICE_NAME = "ofdm-host-core"
-SERVICE_VERSION = "0.2.0"
+SERVICE_VERSION = "0.3.0"
 DEFAULT_HEARTBEAT_SECONDS = 5.0
 
 TRIGGER_PATTERN = re.compile(
@@ -56,6 +57,22 @@ class ConnectionState:
     thread: threading.Thread
     serial_obj: serial.Serial | None = None
     simulate_chunks: list[bytes] | None = None
+
+
+@dataclass(slots=True)
+class RecordState:
+    request_id: str | None
+    wait_trigger: bool
+    root_dir: Path
+    note: str
+    armed_at_ms: int
+    active: bool = False
+    parsed_path: Path | None = None
+    raw_path: Path | None = None
+    parsed_file: Any | None = None
+    raw_file: Any | None = None
+    started_ts: str | None = None
+    records_written: int = 0
 
 
 class JsonLineIO:
@@ -100,6 +117,8 @@ class CoreService:
         self._heartbeat_thread: threading.Thread | None = None
         self._state_lock = threading.Lock()
         self._connection: ConnectionState | None = None
+        self._record_lock = threading.Lock()
+        self._record_state: RecordState | None = None
         self._stream_text_buffer = ""
         self._trigger_detected = False
         self._delay_baseline: float | None = None
@@ -165,6 +184,10 @@ class CoreService:
         return {"ports": ports_data}
 
     @staticmethod
+    def _now_ts() -> str:
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    @staticmethod
     def _parse_baudrate(value: Any) -> int:
         try:
             baudrate = int(value)
@@ -173,6 +196,31 @@ class CoreService:
         if baudrate <= 0:
             raise ValueError("field 'baudrate' must be > 0")
         return baudrate
+
+    @staticmethod
+    def _parse_bool(value: Any, *, field_name: str, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "y", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "n", "off"}:
+                return False
+        raise ValueError(f"field '{field_name}' must be a bool value")
+
+    @staticmethod
+    def _parse_root_dir(value: Any) -> Path:
+        if value is None:
+            return Path(__file__).parent
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("field 'root_dir' must be a non-empty string when provided")
+        root = Path(value)
+        if not root.is_absolute():
+            root = Path(__file__).parent / root
+        return root
 
     @staticmethod
     def _parse_simulate_line(line: str) -> bytes | None:
@@ -203,11 +251,178 @@ class CoreService:
         # 8N1 transmission uses about 10 bits per byte.
         return num_bytes * 10 / baudrate
 
+    @staticmethod
+    def _resolve_record_dirs(root_dir: Path) -> tuple[Path, Path]:
+        parsed_dir = root_dir / "historydata"
+        raw_dir = parsed_dir / "srcdata"
+        parsed_dir.mkdir(parents=True, exist_ok=True)
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        return parsed_dir, raw_dir
+
     def _reset_stream_state(self) -> None:
         self._stream_text_buffer = ""
         self._trigger_detected = False
         self._delay_baseline = None
         self._packet_loss_count = 0
+
+    def _activate_record_if_needed(self, ts: str) -> None:
+        record_event: dict[str, Any] | None = None
+        req_id: str | None = None
+
+        with self._record_lock:
+            state = self._record_state
+            if state is None or state.active:
+                return
+
+            parsed_file = None
+            raw_file = None
+            try:
+                parsed_dir, raw_dir = self._resolve_record_dirs(state.root_dir)
+                dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S.%f")
+                filename = dt.strftime("%Y-%m-%d_%H-%M-%S.txt")
+                parsed_path = parsed_dir / filename
+                raw_path = raw_dir / filename
+
+                parsed_file = open(parsed_path, "w", encoding="utf-8")
+                raw_file = open(raw_path, "wb")
+
+                with self._state_lock:
+                    conn = self._connection
+
+                port = conn.port if conn else "unknown"
+                baudrate = str(conn.baudrate) if conn else "unknown"
+
+                sep = "=" * 60
+                header = f"{sep}\nready_time: {ts}  port: {port}  baudrate: {baudrate}\n{sep}\n"
+                parsed_file.write(header)
+                if state.note:
+                    parsed_file.write("# NOTE_BEGIN\n")
+                    for line in state.note.splitlines():
+                        parsed_file.write(f"# {line}\n")
+                    parsed_file.write("# NOTE_END\n")
+                parsed_file.flush()
+
+                self._delay_baseline = None
+                state.active = True
+                state.parsed_path = parsed_path
+                state.raw_path = raw_path
+                state.parsed_file = parsed_file
+                state.raw_file = raw_file
+                state.started_ts = ts
+
+                req_id = state.request_id
+                state.request_id = None
+
+                record_event = {
+                    "state": "recording",
+                    "wait_trigger": state.wait_trigger,
+                    "started_ts": ts,
+                    "parsed_path": str(parsed_path),
+                    "raw_path": str(raw_path),
+                }
+            except OSError as exc:
+                if parsed_file:
+                    parsed_file.close()
+                if raw_file:
+                    raw_file.close()
+                self._record_state = None
+                self._emit_error(req_id, "RECORD_OPEN_FAILED", str(exc))
+                return
+
+        if record_event is not None:
+            self._emit("record.started", req_id=req_id, payload=record_event)
+
+    @staticmethod
+    def _format_delay(delay_value: float) -> str:
+        text = f"{delay_value:.10f}".rstrip("0").rstrip(".")
+        if text in {"", "-0"}:
+            return "0"
+        return text
+
+    def _record_write_raw(self, data: bytes) -> None:
+        io_error: str | None = None
+        with self._record_lock:
+            state = self._record_state
+            if state is None or not state.active or state.raw_file is None:
+                return
+            try:
+                state.raw_file.write(data)
+                state.raw_file.flush()
+            except OSError as exc:
+                io_error = str(exc)
+
+        if io_error is not None:
+            self._emit_error(None, "RECORD_WRITE_FAILED", f"raw write failed: {io_error}")
+            self._stop_record(reason="raw write failed", emit_event=True)
+
+    def _record_write_parsed_line(self, line: str) -> None:
+        io_error: str | None = None
+        with self._record_lock:
+            state = self._record_state
+            if state is None or not state.active or state.parsed_file is None:
+                return
+            try:
+                state.parsed_file.write(line + "\n")
+                state.parsed_file.flush()
+                state.records_written += 1
+            except OSError as exc:
+                io_error = str(exc)
+
+        if io_error is not None:
+            self._emit_error(None, "RECORD_WRITE_FAILED", f"parsed write failed: {io_error}")
+            self._stop_record(reason="parsed write failed", emit_event=True)
+
+    def _stop_record(
+        self,
+        *,
+        req_id: str | None = None,
+        reason: str,
+        emit_event: bool,
+    ) -> bool:
+        payload: dict[str, Any] | None = None
+
+        with self._record_lock:
+            state = self._record_state
+            if state is None:
+                return False
+
+            active = state.active
+            parsed_path = str(state.parsed_path) if state.parsed_path else None
+            raw_path = str(state.raw_path) if state.raw_path else None
+
+            if state.active and state.parsed_file is not None:
+                sep = "=" * 60
+                end_ts = self._now_ts()
+                try:
+                    state.parsed_file.write(f"\n{sep}\nend_time: {end_ts}\n{sep}\n")
+                    state.parsed_file.flush()
+                except OSError:
+                    pass
+
+            if state.parsed_file is not None:
+                try:
+                    state.parsed_file.close()
+                except OSError:
+                    pass
+
+            if state.raw_file is not None:
+                try:
+                    state.raw_file.close()
+                except OSError:
+                    pass
+
+            payload = {
+                "reason": reason,
+                "active": active,
+                "parsed_path": parsed_path,
+                "raw_path": raw_path,
+                "records_written": state.records_written,
+            }
+            self._record_state = None
+
+        if emit_event and payload is not None:
+            self._emit("record.stopped", req_id=req_id, payload=payload)
+        return True
 
     def _detach_connection(
         self,
@@ -244,21 +459,27 @@ class CoreService:
         if not data:
             return
 
+        ts = self._now_ts()
+        self._record_write_raw(data)
+
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
-            self._emit("stream.hex", payload={"hex": data.hex(), "size": len(data)})
+            hex_text = data.hex()
+            self._emit("stream.hex", payload={"hex": hex_text, "size": len(data)})
+            self._record_write_parsed_line(f"[{ts}] {hex_text}")
             return
 
         self._emit("stream.text", payload={"text": text})
-        self._consume_metrics_text(text)
+        self._consume_metrics_text(text, ts)
 
-    def _consume_metrics_text(self, text: str) -> None:
+    def _consume_metrics_text(self, text: str, ts: str) -> None:
         self._stream_text_buffer += text
 
         if not self._trigger_detected and TRIGGER_PATTERN.search(self._stream_text_buffer):
             self._trigger_detected = True
             self._emit("trigger.detected", payload={"reason": "keyword matched"})
+            self._activate_record_if_needed(ts)
 
         if not self._trigger_detected:
             return
@@ -280,6 +501,7 @@ class CoreService:
             if self._delay_baseline is None:
                 self._delay_baseline = delay_value
             delay = delay_value - self._delay_baseline
+            delay_text = self._format_delay(delay)
 
             self._emit(
                 "metric.offset_delay",
@@ -290,6 +512,7 @@ class CoreService:
                     "delay_raw": delay_raw,
                 },
             )
+            self._record_write_parsed_line(f"[{ts}] offset:{offset_raw}  delay:{delay_text}")
 
         remain = normalized[pos:] if pos < len(normalized) else ""
         lines = remain.split("\n")
@@ -314,10 +537,13 @@ class CoreService:
                     "metric.packet_loss",
                     payload={"count": self._packet_loss_count, "token": "10"},
                 )
+                self._record_write_parsed_line(f"[{ts}] PACKET_LOSS: 10")
                 continue
 
             if (has_offset and not has_delay) or (has_delay and not has_offset):
                 keep_tail.append(line + "\n")
+            else:
+                self._record_write_parsed_line(f"[{ts}] {line}")
 
         self._stream_text_buffer = "\n".join(keep_tail) if keep_tail else ""
 
@@ -334,6 +560,7 @@ class CoreService:
         except Exception as exc:
             self._emit_error(None, "SERIAL_READ_FAILED", str(exc))
         finally:
+            self._stop_record(reason="serial disconnected", emit_event=True)
             detached = self._detach_connection(expected_thread=threading.current_thread())
             if detached:
                 self._release_connection_resources(detached, allow_join=False)
@@ -361,6 +588,7 @@ class CoreService:
                 if conn.stop_event.wait(delay):
                     break
         finally:
+            self._stop_record(reason="serial disconnected", emit_event=True)
             detached = self._detach_connection(expected_thread=threading.current_thread())
             if detached:
                 self._release_connection_resources(detached, allow_join=False)
@@ -447,6 +675,7 @@ class CoreService:
         )
 
     def _handle_serial_close(self, req: Request) -> None:
+        self._stop_record(req_id=req.req_id, reason="serial closed", emit_event=True)
         conn = self._detach_connection()
         if conn is None:
             self._emit_error(req.req_id, "SERIAL_NOT_OPEN", "no active serial session")
@@ -458,6 +687,53 @@ class CoreService:
             req_id=req.req_id,
             payload={"mode": conn.mode, "port": conn.port, "reason": "closed by request"},
         )
+
+    def _handle_record_start(self, req: Request) -> None:
+        with self._state_lock:
+            has_connection = self._connection is not None
+
+        if not has_connection:
+            self._emit_error(req.req_id, "RECORD_NO_SERIAL", "serial must be connected before record.start")
+            return
+
+        wait_trigger = self._parse_bool(req.payload.get("wait_trigger"), field_name="wait_trigger", default=True)
+        root_dir = self._parse_root_dir(req.payload.get("root_dir"))
+        note_value = req.payload.get("note", "")
+        note = str(note_value).strip() if note_value is not None else ""
+
+        with self._record_lock:
+            if self._record_state is not None:
+                self._emit_error(req.req_id, "RECORD_ALREADY_ACTIVE", "record session already armed or active")
+                return
+
+            self._record_state = RecordState(
+                request_id=req.req_id,
+                wait_trigger=wait_trigger,
+                root_dir=root_dir,
+                note=note,
+                armed_at_ms=self._now_ms(),
+            )
+
+        if wait_trigger and not self._trigger_detected:
+            self._emit(
+                "record.armed",
+                req_id=req.req_id,
+                payload={
+                    "wait_trigger": True,
+                    "root_dir": str(root_dir),
+                    "armed_at_ms": self._now_ms(),
+                },
+            )
+            return
+
+        if not wait_trigger:
+            self._trigger_detected = True
+        self._activate_record_if_needed(self._now_ts())
+
+    def _handle_record_stop(self, req: Request) -> None:
+        stopped = self._stop_record(req_id=req.req_id, reason="stopped by request", emit_event=True)
+        if not stopped:
+            self._emit_error(req.req_id, "RECORD_NOT_ACTIVE", "no active record session")
 
     def _handle_request(self, req: Request) -> None:
         if req.req_type == "app.init":
@@ -480,11 +756,16 @@ class CoreService:
             self._handle_serial_close(req)
             return
 
-        if req.req_type in {"record.start", "record.stop"}:
-            self._emit_error(req.req_id, "NOT_IMPLEMENTED", f"{req.req_type} is planned in next phase-2 step")
+        if req.req_type == "record.start":
+            self._handle_record_start(req)
+            return
+
+        if req.req_type == "record.stop":
+            self._handle_record_stop(req)
             return
 
         if req.req_type == "app.shutdown":
+            self._stop_record(reason="shutdown", emit_event=True)
             conn = self._detach_connection()
             if conn is not None:
                 self._release_connection_resources(conn, allow_join=True)

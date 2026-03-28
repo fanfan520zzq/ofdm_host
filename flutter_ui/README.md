@@ -3,7 +3,7 @@
 这是 OFDM Host 的 Flutter 前端壳工程（迁移中的 UI 层）。
 
 当前状态：
-- 已有桌面界面骨架（连接控制 + 实时事件流）
+- 已有桌面界面骨架（连接控制 + 记录控制 + 实时事件流）
 - 已可对接 Python `core_service.py`
 - 后端串口和算法仍由 Python 负责
 
@@ -43,5 +43,6 @@ flutter run -d windows
 
 ## 说明
 
-- 这是 Phase 2 的 UI 起步版本，重点是通信链路和状态展示。
+- 这是 Phase 2 的 UI 完成版，已具备串口采集闭环控制。
+- 界面可直接触发 `record.start` / `record.stop`，并展示记录文件路径。
 - 后续会继续补齐波形、统计结果页、日志筛选等能力。

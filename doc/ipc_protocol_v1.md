@@ -14,7 +14,7 @@
 - `code`: 错误码（仅 error）
 - `message`: 错误描述（仅 error）
 
-## 2. 已实现请求（Phase 1 + Phase 2 起步）
+## 2. 已实现请求（Phase 1 + Phase 2）
 
 ### 2.1 app.init
 请求：
@@ -80,6 +80,26 @@
 {"id":"7","type":"serial.disconnected","ts":1710000000005,"payload":{"mode":"real","port":"COM3","reason":"closed by request"}}
 ```
 
+### 2.7 record.start
+请求（等待触发后开始记录）：
+```json
+{"id":"8","type":"record.start","payload":{"wait_trigger":true,"root_dir":".","note":"phase2 run"}}
+```
+响应（触发后真正进入记录状态）：
+```json
+{"id":"8","type":"record.started","ts":1710000000006,"payload":{"state":"recording","wait_trigger":true,"started_ts":"2026-03-28 11:41:20.901","parsed_path":"C:/repo/historydata/2026-03-28_11-41-20.txt","raw_path":"C:/repo/historydata/srcdata/2026-03-28_11-41-20.txt"}}
+```
+
+### 2.8 record.stop
+请求：
+```json
+{"id":"9","type":"record.stop","payload":{}}
+```
+响应：
+```json
+{"id":"9","type":"record.stopped","ts":1710000000007,"payload":{"reason":"stopped by request","active":true,"parsed_path":"C:/repo/historydata/2026-03-28_11-41-20.txt","raw_path":"C:/repo/historydata/srcdata/2026-03-28_11-41-20.txt","records_written":120}}
+```
+
 ## 3. 服务端主动事件
 
 ### 3.1 app.ready
@@ -124,6 +144,24 @@
 {"id":null,"type":"metric.packet_loss","ts":1710000005500,"payload":{"count":1,"token":"10"}}
 ```
 
+### 3.8 record.armed
+调用 `record.start` 且配置为等待触发时，服务会先进入 armed 状态：
+```json
+{"id":"8","type":"record.armed","ts":1710000005600,"payload":{"wait_trigger":true,"root_dir":"C:/repo","armed_at_ms":1710000005600}}
+```
+
+### 3.9 record.started
+满足触发条件并成功创建记录文件后发出：
+```json
+{"id":"8","type":"record.started","ts":1710000005700,"payload":{"state":"recording","wait_trigger":true,"started_ts":"2026-03-28 11:41:20.901","parsed_path":"C:/repo/historydata/2026-03-28_11-41-20.txt","raw_path":"C:/repo/historydata/srcdata/2026-03-28_11-41-20.txt"}}
+```
+
+### 3.10 record.stopped
+记录停止后发出：
+```json
+{"id":"9","type":"record.stopped","ts":1710000005800,"payload":{"reason":"stopped by request","active":true,"parsed_path":"C:/repo/historydata/2026-03-28_11-41-20.txt","raw_path":"C:/repo/historydata/srcdata/2026-03-28_11-41-20.txt","records_written":120}}
+```
+
 ## 4. 错误响应
 统一错误类型：`type = "error"`
 
@@ -143,7 +181,11 @@
 - `SERIAL_READ_FAILED`: 串口读取异常
 - `SIMULATE_FILE_NOT_FOUND`: 模拟输入文件不存在
 - `SIMULATE_EMPTY`: 模拟输入文件没有有效数据
-- `NOT_IMPLEMENTED`: 预留接口尚未实现
+- `RECORD_NO_SERIAL`: 未连接串口时调用记录
+- `RECORD_ALREADY_ACTIVE`: 已存在 armed 或 active 的记录会话
+- `RECORD_NOT_ACTIVE`: 停止记录时没有活动会话
+- `RECORD_OPEN_FAILED`: 创建记录文件失败
+- `RECORD_WRITE_FAILED`: 记录文件写入失败
 
 ## 5. 下一阶段扩展（Phase 2）
 已实现：
@@ -156,10 +198,12 @@
 - `stream.hex`
 - `metric.offset_delay`
 - `metric.packet_loss`
-
-待实现：
 - `record.start`
 - `record.stop`
+- `record.armed`
 - `record.started`
 - `record.stopped`
-- 记录文件落盘与旧版格式对齐
+
+完成说明：
+- 已具备触发后记录 + stop 落盘的完整闭环
+- 输出 parsed 与 raw 双文件结构（`historydata/` + `historydata/srcdata/`）

@@ -119,6 +119,26 @@ class CoreServiceClient {
 
   String closeSerial() => send(type: 'serial.close', payload: <String, dynamic>{});
 
+  String startRecord({
+    required bool waitTrigger,
+    String? rootDir,
+    String? note,
+  }) {
+    final payload = <String, dynamic>{
+      'wait_trigger': waitTrigger,
+    };
+    if (rootDir != null && rootDir.isNotEmpty) {
+      payload['root_dir'] = rootDir;
+    }
+    if (note != null && note.isNotEmpty) {
+      payload['note'] = note;
+    }
+
+    return send(type: 'record.start', payload: payload);
+  }
+
+  String stopRecord() => send(type: 'record.stop', payload: <String, dynamic>{});
+
   void _handleStdoutLine(String line) {
     if (line.trim().isEmpty) {
       return;
