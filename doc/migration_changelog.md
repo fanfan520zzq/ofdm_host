@@ -15,3 +15,13 @@
   - doc/migration_progress.md
   - tools/migration_checkpoint.py
   - README.md
+
+## v0.3.0
+- 时间: 2026-03-28 11:23:43
+- 阶段: phase-2-start
+- 说明: phase2 serial streaming and non-technical summary
+- 文件:
+  - core_service.py
+  - doc/ipc_protocol_v1.md
+  - doc/migration_progress.md
+  - doc/migration_plan_vibecoding.md

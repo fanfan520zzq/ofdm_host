@@ -14,7 +14,7 @@
 - `code`: 错误码（仅 error）
 - `message`: 错误描述（仅 error）
 
-## 2. 已实现请求（Phase 1）
+## 2. 已实现请求（Phase 1 + Phase 2 起步）
 
 ### 2.1 app.init
 请求：
@@ -56,6 +56,30 @@
 {"id":"4","type":"app.stopped","ts":1710000000003,"payload":{"reason":"shutdown requested"}}
 ```
 
+### 2.5 serial.open
+请求（真实串口）：
+```json
+{"id":"5","type":"serial.open","payload":{"mode":"real","port":"COM3","baudrate":115200}}
+```
+请求（模拟串口）：
+```json
+{"id":"6","type":"serial.open","payload":{"mode":"simulate","file":"simulate_input.txt","baudrate":115200}}
+```
+响应：
+```json
+{"id":"5","type":"serial.connected","ts":1710000000004,"payload":{"mode":"real","port":"COM3","baudrate":115200}}
+```
+
+### 2.6 serial.close
+请求：
+```json
+{"id":"7","type":"serial.close","payload":{}}
+```
+响应：
+```json
+{"id":"7","type":"serial.disconnected","ts":1710000000005,"payload":{"mode":"real","port":"COM3","reason":"closed by request"}}
+```
+
 ## 3. 服务端主动事件
 
 ### 3.1 app.ready
@@ -68,6 +92,36 @@
 默认每 5 秒发送一次（可通过启动参数关闭）：
 ```json
 {"id":null,"type":"app.heartbeat","ts":1710000005000,"payload":{"service":"ofdm-host-core"}}
+```
+
+### 3.3 stream.text
+可解码文本流事件（串口原文）：
+```json
+{"id":null,"type":"stream.text","ts":1710000005100,"payload":{"text":"offset:0.01 delay:0.1\n"}}
+```
+
+### 3.4 stream.hex
+不可解码字节事件：
+```json
+{"id":null,"type":"stream.hex","ts":1710000005200,"payload":{"hex":"0a01ff","size":3}}
+```
+
+### 3.5 trigger.detected
+命中触发关键词后发出：
+```json
+{"id":null,"type":"trigger.detected","ts":1710000005300,"payload":{"reason":"keyword matched"}}
+```
+
+### 3.6 metric.offset_delay
+触发后解析到 offset/delay 时发出：
+```json
+{"id":null,"type":"metric.offset_delay","ts":1710000005400,"payload":{"offset":0.001,"delay":0.0,"offset_raw":"0.001","delay_raw":"0.01"}}
+```
+
+### 3.7 metric.packet_loss
+检测到丢包标记（行内容为 10）时发出：
+```json
+{"id":null,"type":"metric.packet_loss","ts":1710000005500,"payload":{"count":1,"token":"10"}}
 ```
 
 ## 4. 错误响应
@@ -83,15 +137,18 @@
 - `INVALID_REQUEST`: 字段缺失或类型不合法
 - `UNKNOWN_TYPE`: 未实现的消息类型
 - `INTERNAL_ERROR`: 服务内部异常
+- `SERIAL_ALREADY_OPEN`: 串口会话已存在
+- `SERIAL_NOT_OPEN`: 当前没有活动串口会话
+- `SERIAL_OPEN_FAILED`: 打开真实串口失败
+- `SERIAL_READ_FAILED`: 串口读取异常
+- `SIMULATE_FILE_NOT_FOUND`: 模拟输入文件不存在
+- `SIMULATE_EMPTY`: 模拟输入文件没有有效数据
+- `NOT_IMPLEMENTED`: 预留接口尚未实现
 
 ## 5. 下一阶段扩展（Phase 2）
-计划新增请求：
+已实现：
 - `serial.open`
 - `serial.close`
-- `record.start`
-- `record.stop`
-
-计划新增事件：
 - `serial.connected`
 - `serial.disconnected`
 - `trigger.detected`
@@ -99,5 +156,10 @@
 - `stream.hex`
 - `metric.offset_delay`
 - `metric.packet_loss`
+
+待实现：
+- `record.start`
+- `record.stop`
 - `record.started`
 - `record.stopped`
+- 记录文件落盘与旧版格式对齐
