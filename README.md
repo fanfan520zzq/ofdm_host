@@ -45,6 +45,25 @@
 - 阶段进度看板：`doc/migration_progress.md`
 - 协议细节（给开发同学）：`doc/ipc_protocol_v1.md`
 
+## 迁移目标完成度（截至 v0.6.3）
+
+- 总目标：Flutter 前端 + Python Core Service + JSON Lines IPC
+- 已完成阶段：阶段 0、阶段 1、阶段 2、阶段 3
+- 待开始阶段：阶段 4（工程化与发布）、阶段 5（灰度替换）
+
+当前已完成的关键能力：
+- Python Core 支持服务启动/关闭、心跳、串口开关、记录控制、文件分析
+- Flutter UI 支持连接控制、离线分析、实时双波形、日志过滤与高亮
+- 离线分析支持 TXT/JSON 导出、导出目录与导出命名模板配置、重名覆盖策略
+- 波形支持自动/固定量程切换，并支持固定量程下 offset/delay 独立坐标配置
+- 日志高亮已支持缓存过滤与限量渲染，提升高流量场景性能
+
+距离 README 目标仍待完成的步骤：
+1. Phase 4：工程化发布（打包整合、启动与路径配置、发布流程）
+2. Phase 5：灰度替换（并行运行、回滚预案、最终切换）
+
+UI 现状基线文档：`ui.md`（后续 UI 修改将直接更新该文档）
+
 ## 如果你只关心日常使用
 
 - 继续运行：`python main.py`
@@ -83,6 +102,9 @@ flutter run -d windows
 - 对 `historydata/*.txt` 执行离线统计分析（trim + converge_time）
 - 导出离线分析结果（TXT / JSON，默认输出到 `analysis_exports/`）
 - 可在界面中自定义离线分析导出目录
+- 可配置导出命名模板与重名策略（自动重命名 / 覆盖 / 跳过）
+- 固定量程模式下可分别设置 offset 与 delay 的独立坐标范围
+- 日志高亮使用缓存过滤与限量渲染，降低高流量场景卡顿
 
 ## 自动版本留痕（每次大改）
 
@@ -113,19 +135,100 @@ python -m PyInstaller --noconfirm --clean --name ofdm_host --windowed main.py
 ```text
 dist/ofdm_host/ofdm_host.exe
 ```
- ## 项目结构
- ```text
- ofdm_host/
- ├── main.py              # GUI 主程序（采集控制 + 分析结果弹窗）
- ├── serial_reader.py     # 串口线程与模拟串口线程
- ├── process_data.py      # 离线分析脚本（解析 offset/delay）
- ├── fix_data_format.py   # RX 格式数据修复脚本
- ├── simulate_input.txt   # 模拟串口输入源
- ├── requirements.txt
- ├── historydata/         # 采集历史文件输出目录
- ├── test_regex.py        # 正则逻辑调试脚本
- └── test.txt             # 示例原始日志
- ```
+## 项目结构与文件职责
+
+```text
+ofdm_host/
+├── .gitignore
+├── README.md
+├── ui.md
+├── MIGRATION_VERSION
+├── main.py
+├── core_service.py
+├── serial_reader.py
+├── process_data.py
+├── fix_data_format.py
+├── ui_dark_demo.py
+├── requirements.txt
+├── ofdm_host.spec
+├── simulate_input.txt
+├── test_regex.py
+├── test.txt
+├── flutter_version.txt
+├── flutter_exit.txt
+├── ofdm_host - 快捷方式.lnk
+├── tools/
+│   └── migration_checkpoint.py
+├── doc/
+│   ├── README.md
+│   ├── FLCLASH_UI_技术栈总结.md
+│   ├── ipc_protocol_v1.md
+│   ├── migration_progress.md
+│   ├── migration_changelog.md
+│   └── migration_plan_vibecoding.md
+├── flutter_ui/
+│   ├── pubspec.yaml
+│   ├── lib/main.dart
+│   ├── lib/src/app.dart
+│   ├── lib/src/core_service_client.dart
+│   ├── lib/src/models.dart
+│   └── test/widget_test.dart
+├── historydata/
+│   ├── *.txt
+│   └── srcdata/
+├── build/
+├── dist/
+├── .venv/
+├── .flutter-sdk/
+├── __pycache__/
+└── myapp/
+```
+
+### 根目录文件说明
+
+- `README.md`：项目总览、运行方式、迁移进展与操作说明。
+- `ui.md`：UI 设计与功能基线文档，后续 UI 修改统一在这里维护。
+- `.gitignore`：Git 忽略规则，避免临时文件进入版本库。
+- `MIGRATION_VERSION`：当前迁移版本号。
+- `main.py`：旧版 PyQt6 主程序（当前稳定可用入口）。
+- `core_service.py`：Python 后台核心服务，提供 JSON Lines IPC 给 Flutter。
+- `serial_reader.py`：串口读取线程和模拟串口线程实现（旧版主流程依赖）。
+- `process_data.py`：离线数据解析与统计计算（旧版与 Core `file.process` 复用）。
+- `fix_data_format.py`：日志格式修复工具（处理 RX 截断/错位数据）。
+- `ui_dark_demo.py`：PyQt 界面样式实验文件（不在主运行链路）。
+- `requirements.txt`：Python 依赖列表。
+- `ofdm_host.spec`：PyInstaller 打包配置。
+- `simulate_input.txt`：模拟串口输入样例。
+- `test_regex.py`：正则匹配调试脚本。
+- `test.txt`：原始日志示例文件。
+- `flutter_version.txt`：本地 Flutter 版本记录文件（环境辅助）。
+- `flutter_exit.txt`：本地 Flutter 运行/退出辅助记录文件。
+- `ofdm_host - 快捷方式.lnk`：Windows 快捷方式文件（本地使用）。
+
+### 关键目录说明
+
+- `tools/`：迁移流程工具脚本。
+	- `migration_checkpoint.py`：自动做版本号升级、changelog 追加、git 提交与 tag。
+- `doc/`：迁移和技术文档目录。
+	- `README.md`：文档总览入口。
+	- `FLCLASH_UI_技术栈总结.md`：UI 技术栈调研笔记（历史参考）。
+	- `ipc_protocol_v1.md`：前后端 IPC 协议定义。
+	- `migration_progress.md`：阶段进度与下一步计划。
+	- `migration_changelog.md`：每次迁移 checkpoint 的变更记录。
+	- `migration_plan_vibecoding.md`：完整迁移方案与风险评估。
+- `flutter_ui/`：Flutter 桌面前端工程。
+	- `lib/main.dart`：Flutter 入口。
+	- `lib/src/app.dart`：主页面 UI、交互逻辑、波形/日志/分析面板。
+	- `lib/src/core_service_client.dart`：与 Python Core 通信的 IPC 客户端。
+	- `lib/src/models.dart`：核心事件模型与 JSON 解析。
+	- `test/widget_test.dart`：Flutter 基础冒烟测试。
+- `historydata/`：采集输出目录（解析后文本）。
+- `historydata/srcdata/`：串口原始字节流文本。
+- `build/`、`dist/`：构建与打包产物目录。
+- `.venv/`、`.flutter-sdk/`：本地开发环境目录。
+- `__pycache__/`：Python 字节码缓存目录。
+- `myapp/`：本地试验目录（与当前主迁移链路无直接依赖）。
+
  ## 快速开始
  ### 1) 启动图形界面
  ```bash

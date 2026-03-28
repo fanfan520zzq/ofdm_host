@@ -14,6 +14,12 @@ enum _WaveScaleMode {
   fixed,
 }
 
+enum _ExportOverwritePolicy {
+  autoRename,
+  overwrite,
+  skip,
+}
+
 class OfdmHostApp extends StatelessWidget {
   const OfdmHostApp({super.key});
 
@@ -49,6 +55,8 @@ class _HomePage extends StatefulWidget {
 class _HomePageState extends State<_HomePage> {
   static const int _defaultWaveWindowPoints = 420;
   static const int _maxWaveBufferPoints = 2400;
+  static const int _maxLogLines = 600;
+  static const int _maxRenderedLogLines = 220;
   static const List<int> _waveWindowOptions = <int>[120, 240, 420, 800, 1200];
 
   final CoreServiceClient _client = CoreServiceClient();
@@ -66,9 +74,12 @@ class _HomePageState extends State<_HomePage> {
   final TextEditingController _analysisFileController = TextEditingController();
     final TextEditingController _exportDirController =
       TextEditingController(text: 'analysis_exports');
+    final TextEditingController _exportNameTemplateController =
+      TextEditingController(text: 'analysis_{type}_{ts}');
   final TextEditingController _logFilterController = TextEditingController();
 
-  final List<String> _logLines = <String>[];
+    final List<_LogEntry> _logEntries = <_LogEntry>[];
+    final List<_LogEntry> _filteredLogEntries = <_LogEntry>[];
   final List<String> _ports = <String>[];
   final List<double> _offsetSeries = <double>[];
   final List<double> _delaySeries = <double>[];
@@ -94,13 +105,23 @@ class _HomePageState extends State<_HomePage> {
   int _waveWindowPoints = _defaultWaveWindowPoints;
   double _waveZoomY = 1.0;
   _WaveScaleMode _waveScaleMode = _WaveScaleMode.auto;
-  double _waveFixedHalfRange = 0.02;
+  double _waveFixedHalfRangeOffset = 0.02;
+  double _waveFixedHalfRangeDelay = 0.02;
+  _ExportOverwritePolicy _exportOverwritePolicy =
+      _ExportOverwritePolicy.autoRename;
   double? _lastOffset;
   double? _lastDelay;
   String? _analysisExportPath;
+  String _logFilterKeyword = '';
 
   String _statusText = '未连接';
   String _analysisHint = '尚未分析历史文件';
+
+  @override
+  void initState() {
+    super.initState();
+    _rebuildFilteredLogs();
+  }
 
   @override
   void dispose() {
@@ -115,6 +136,7 @@ class _HomePageState extends State<_HomePage> {
     _recordNoteController.dispose();
     _analysisFileController.dispose();
     _exportDirController.dispose();
+    _exportNameTemplateController.dispose();
     _logFilterController.dispose();
     super.dispose();
   }
@@ -417,23 +439,44 @@ class _HomePageState extends State<_HomePage> {
   void _appendLog(String line) {
     final ts = DateTime.now().toIso8601String();
     final output = '[$ts] $line';
+    final pretty = _tryPrettyJsonLine(output);
+    final entry = _LogEntry(
+      raw: output,
+      pretty: pretty,
+      prettyLower: pretty.toLowerCase(),
+    );
 
     setState(() {
-      _logLines.insert(0, output);
-      if (_logLines.length > 600) {
-        _logLines.removeRange(600, _logLines.length);
+      _logEntries.insert(0, entry);
+      if (_logEntries.length > _maxLogLines) {
+        _logEntries.removeRange(_maxLogLines, _logEntries.length);
       }
+      _rebuildFilteredLogs();
     });
   }
 
-  List<String> get _filteredLogs {
-    final keyword = _logFilterController.text.trim().toLowerCase();
-    if (keyword.isEmpty) {
-      return _logLines;
+  void _onLogFilterChanged(String value) {
+    setState(() {
+      _logFilterKeyword = value.trim().toLowerCase();
+      _rebuildFilteredLogs();
+    });
+  }
+
+  void _rebuildFilteredLogs() {
+    _filteredLogEntries.clear();
+    if (_logFilterKeyword.isEmpty) {
+      _filteredLogEntries.addAll(_logEntries.take(_maxRenderedLogLines));
+      return;
     }
-    return _logLines
-        .where((line) => line.toLowerCase().contains(keyword))
-        .toList(growable: false);
+
+    for (final entry in _logEntries) {
+      if (entry.prettyLower.contains(_logFilterKeyword)) {
+        _filteredLogEntries.add(entry);
+        if (_filteredLogEntries.length >= _maxRenderedLogLines) {
+          break;
+        }
+      }
+    }
   }
 
   _SeriesStats? _calcStats(List<double> values) {
@@ -479,8 +522,11 @@ class _HomePageState extends State<_HomePage> {
       final dir = Directory(_resolveExportDirPath());
       await dir.create(recursive: true);
 
-      final ts = _safeFileTimestamp(DateTime.now());
-      final path = '${dir.path}${Platform.pathSeparator}analysis_$ts.json';
+      final path = _resolveExportFilePath(
+        dir: dir,
+        type: 'json',
+        ext: 'json',
+      );
       final file = File(path);
       await file.writeAsString(
         const JsonEncoder.withIndent('  ').convert(payload),
@@ -508,8 +554,11 @@ class _HomePageState extends State<_HomePage> {
       final dir = Directory(_resolveExportDirPath());
       await dir.create(recursive: true);
 
-      final ts = _safeFileTimestamp(DateTime.now());
-      final path = '${dir.path}${Platform.pathSeparator}analysis_$ts.txt';
+      final path = _resolveExportFilePath(
+        dir: dir,
+        type: 'txt',
+        ext: 'txt',
+      );
       final file = File(path);
       await file.writeAsString(_buildAnalysisSummaryText(payload), flush: true);
 
@@ -569,19 +618,70 @@ class _HomePageState extends State<_HomePage> {
     return configured;
   }
 
+  String _resolveExportBaseName({required String type}) {
+    final rawTemplate = _exportNameTemplateController.text.trim();
+    final template = rawTemplate.isEmpty ? 'analysis_{type}_{ts}' : rawTemplate;
+    final now = DateTime.now();
+    final date = now.toIso8601String().split('T').first;
+    final ts = _safeFileTimestamp(now);
+
+    final replaced = template
+        .replaceAll('{type}', type)
+        .replaceAll('{ts}', ts)
+        .replaceAll('{date}', date);
+    return _sanitizeFileNamePart(replaced);
+  }
+
+  String _sanitizeFileNamePart(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    if (sanitized.isEmpty) {
+      return 'analysis';
+    }
+    return sanitized;
+  }
+
+  String _resolveExportFilePath({
+    required Directory dir,
+    required String type,
+    required String ext,
+  }) {
+    final baseName = _resolveExportBaseName(type: type);
+    final candidate = '${dir.path}${Platform.pathSeparator}$baseName.$ext';
+    final file = File(candidate);
+
+    switch (_exportOverwritePolicy) {
+      case _ExportOverwritePolicy.overwrite:
+        return candidate;
+      case _ExportOverwritePolicy.skip:
+        if (file.existsSync()) {
+          throw FileSystemException('导出目标已存在(策略: 跳过)', candidate);
+        }
+        return candidate;
+      case _ExportOverwritePolicy.autoRename:
+        if (!file.existsSync()) {
+          return candidate;
+        }
+        for (var i = 1; i < 10000; i++) {
+          final next = '${dir.path}${Platform.pathSeparator}${baseName}_$i.$ext';
+          if (!File(next).existsSync()) {
+            return next;
+          }
+        }
+        throw FileSystemException('无法生成可用导出文件名', candidate);
+    }
+  }
+
   TextSpan _buildHighlightedSpan({
     required String text,
-    required String keyword,
+    required String lowerText,
+    required String lowerKeyword,
     required TextStyle baseStyle,
     required TextStyle highlightStyle,
   }) {
-    final trimmed = keyword.trim();
-    if (trimmed.isEmpty) {
+    if (lowerKeyword.isEmpty) {
       return TextSpan(text: text, style: baseStyle);
     }
 
-    final lowerText = text.toLowerCase();
-    final lowerKeyword = trimmed.toLowerCase();
     final spans = <TextSpan>[];
     var cursor = 0;
 
@@ -957,6 +1057,45 @@ class _HomePageState extends State<_HomePage> {
               ),
             ),
             const SizedBox(height: 8),
+            TextField(
+              controller: _exportNameTemplateController,
+              decoration: const InputDecoration(
+                labelText: '导出命名模板',
+                hintText: 'analysis_{type}_{ts} (支持 {type}/{ts}/{date})',
+              ),
+            ),
+            const SizedBox(height: 8),
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SegmentedButton<_ExportOverwritePolicy>(
+                segments: const <ButtonSegment<_ExportOverwritePolicy>>[
+                  ButtonSegment<_ExportOverwritePolicy>(
+                    value: _ExportOverwritePolicy.autoRename,
+                    label: Text('自动重命名'),
+                  ),
+                  ButtonSegment<_ExportOverwritePolicy>(
+                    value: _ExportOverwritePolicy.overwrite,
+                    label: Text('覆盖'),
+                  ),
+                  ButtonSegment<_ExportOverwritePolicy>(
+                    value: _ExportOverwritePolicy.skip,
+                    label: Text('跳过'),
+                  ),
+                ],
+                selected: <_ExportOverwritePolicy>{_exportOverwritePolicy},
+                onSelectionChanged: (selection) {
+                  setState(() {
+                    _exportOverwritePolicy = selection.first;
+                  });
+                },
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '占位符: {type} {ts} {date}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
             Text(_analysisHint, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 8),
             _buildAnalysisResultCard(),
@@ -1150,33 +1289,60 @@ class _HomePageState extends State<_HomePage> {
               const SizedBox(width: 8),
               Text(
                 useFixedRange
-                    ? '±${_waveFixedHalfRange.toStringAsFixed(4)}'
+                    ? 'offset ±${_waveFixedHalfRangeOffset.toStringAsFixed(4)} / delay ±${_waveFixedHalfRangeDelay.toStringAsFixed(4)}'
                     : '按数据自适应',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
           ),
           if (useFixedRange)
-            Row(
+            Column(
               children: <Widget>[
-                Text(
-                  '固定量程 ${_waveFixedHalfRange.toStringAsFixed(4)}',
-                  style: Theme.of(context).textTheme.bodySmall,
+                Row(
+                  children: <Widget>[
+                    Text(
+                      'offset 固定量程 ${_waveFixedHalfRangeOffset.toStringAsFixed(4)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Slider(
+                        value: _waveFixedHalfRangeOffset,
+                        min: 0.001,
+                        max: 0.2,
+                        divisions: 199,
+                        label: _waveFixedHalfRangeOffset.toStringAsFixed(4),
+                        onChanged: (value) {
+                          setState(() {
+                            _waveFixedHalfRangeOffset = value;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Slider(
-                    value: _waveFixedHalfRange,
-                    min: 0.001,
-                    max: 0.2,
-                    divisions: 199,
-                    label: _waveFixedHalfRange.toStringAsFixed(4),
-                    onChanged: (value) {
-                      setState(() {
-                        _waveFixedHalfRange = value;
-                      });
-                    },
-                  ),
+                Row(
+                  children: <Widget>[
+                    Text(
+                      'delay 固定量程 ${_waveFixedHalfRangeDelay.toStringAsFixed(4)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Slider(
+                        value: _waveFixedHalfRangeDelay,
+                        min: 0.001,
+                        max: 0.2,
+                        divisions: 199,
+                        label: _waveFixedHalfRangeDelay.toStringAsFixed(4),
+                        onChanged: (value) {
+                          setState(() {
+                            _waveFixedHalfRangeDelay = value;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -1192,7 +1358,7 @@ class _HomePageState extends State<_HomePage> {
                     stats: offsetStats,
                     amplitudeScale: _waveZoomY,
                     useFixedRange: useFixedRange,
-                    fixedHalfRange: _waveFixedHalfRange,
+                    fixedHalfRange: _waveFixedHalfRangeOffset,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -1204,7 +1370,7 @@ class _HomePageState extends State<_HomePage> {
                     stats: delayStats,
                     amplitudeScale: _waveZoomY,
                     useFixedRange: useFixedRange,
-                    fixedHalfRange: _waveFixedHalfRange,
+                    fixedHalfRange: _waveFixedHalfRangeDelay,
                   ),
                 ),
               ],
@@ -1270,7 +1436,7 @@ class _HomePageState extends State<_HomePage> {
   }
 
   Widget _buildLogPanel() {
-    final filtered = _filteredLogs;
+    final filtered = _filteredLogEntries;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1294,7 +1460,12 @@ class _HomePageState extends State<_HomePage> {
               ),
               const Spacer(),
               TextButton(
-                onPressed: () => setState(_logLines.clear),
+                onPressed: () {
+                  setState(() {
+                    _logEntries.clear();
+                    _filteredLogEntries.clear();
+                  });
+                },
                 child: const Text('清空'),
               ),
             ],
@@ -1302,7 +1473,7 @@ class _HomePageState extends State<_HomePage> {
           const SizedBox(height: 8),
           TextField(
             controller: _logFilterController,
-            onChanged: (_) => setState(() {}),
+            onChanged: _onLogFilterChanged,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
               hintText: '日志关键词过滤',
@@ -1321,8 +1492,7 @@ class _HomePageState extends State<_HomePage> {
               reverse: true,
               itemCount: filtered.length,
               itemBuilder: (context, index) {
-                final line = filtered[index];
-                final pretty = _tryPrettyJsonLine(line);
+                final entry = filtered[index];
                 const baseStyle = TextStyle(
                   fontFamily: 'monospace',
                   fontSize: 12,
@@ -1340,14 +1510,17 @@ class _HomePageState extends State<_HomePage> {
                     color: Colors.white.withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Text.rich(
-                    _buildHighlightedSpan(
-                      text: pretty,
-                      keyword: _logFilterController.text,
-                      baseStyle: baseStyle,
-                      highlightStyle: highlightStyle,
-                    ),
-                  ),
+                  child: _logFilterKeyword.isEmpty
+                      ? Text(entry.pretty, style: baseStyle)
+                      : Text.rich(
+                          _buildHighlightedSpan(
+                            text: entry.pretty,
+                            lowerText: entry.prettyLower,
+                            lowerKeyword: _logFilterKeyword,
+                            baseStyle: baseStyle,
+                            highlightStyle: highlightStyle,
+                          ),
+                        ),
                 );
               },
             ),
@@ -1374,6 +1547,18 @@ class _HomePageState extends State<_HomePage> {
       return line;
     }
   }
+}
+
+class _LogEntry {
+  const _LogEntry({
+    required this.raw,
+    required this.pretty,
+    required this.prettyLower,
+  });
+
+  final String raw;
+  final String pretty;
+  final String prettyLower;
 }
 
 class _SeriesStats {
