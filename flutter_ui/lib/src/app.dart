@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'core_service_client.dart';
 import 'models.dart';
@@ -58,6 +59,16 @@ class _HomePageState extends State<_HomePage> {
   static const int _maxLogLines = 600;
   static const int _maxRenderedLogLines = 220;
   static const List<int> _waveWindowOptions = <int>[120, 240, 420, 800, 1200];
+  static const List<String> _coreScriptPathFallbackCandidates = <String>[
+    'core_service.py',
+    '../core_service.py',
+    'python_core/core_service.py',
+  ];
+  static const List<String> _simulatePathFallbackCandidates = <String>[
+    'simulate_input.txt',
+    '../simulate_input.txt',
+    'python_core/simulate_input.txt',
+  ];
 
   final CoreServiceClient _client = CoreServiceClient();
 
@@ -70,16 +81,16 @@ class _HomePageState extends State<_HomePage> {
   final TextEditingController _recordRootController =
       TextEditingController(text: '.');
   final TextEditingController _recordNoteController =
-      TextEditingController(text: 'phase3 flutter ui run');
+      TextEditingController(text: 'phase4 flutter ui run');
   final TextEditingController _analysisFileController = TextEditingController();
-    final TextEditingController _exportDirController =
+  final TextEditingController _exportDirController =
       TextEditingController(text: 'analysis_exports');
-    final TextEditingController _exportNameTemplateController =
+  final TextEditingController _exportNameTemplateController =
       TextEditingController(text: 'analysis_{type}_{ts}');
   final TextEditingController _logFilterController = TextEditingController();
 
-    final List<_LogEntry> _logEntries = <_LogEntry>[];
-    final List<_LogEntry> _filteredLogEntries = <_LogEntry>[];
+  final List<_LogEntry> _logEntries = <_LogEntry>[];
+  final List<_LogEntry> _filteredLogEntries = <_LogEntry>[];
   final List<String> _ports = <String>[];
   final List<double> _offsetSeries = <double>[];
   final List<double> _delaySeries = <double>[];
@@ -120,6 +131,7 @@ class _HomePageState extends State<_HomePage> {
   @override
   void initState() {
     super.initState();
+    _bootstrapLaunchConfig();
     _rebuildFilteredLogs();
   }
 
@@ -142,6 +154,15 @@ class _HomePageState extends State<_HomePage> {
   }
 
   Future<void> _startService() async {
+    final validationError = _validateLaunchConfig();
+    if (validationError != null) {
+      setState(() {
+        _statusText = '启动前检查失败';
+      });
+      _appendLog('启动前检查失败: $validationError');
+      return;
+    }
+
     try {
       await _client.start(
         pythonExecutable: _pythonPathController.text.trim(),
@@ -189,8 +210,21 @@ class _HomePageState extends State<_HomePage> {
     }
 
     if (_simulateMode) {
+      final configured = _simulatePathController.text.trim();
+      final resolved = _resolveExistingFilePath(
+        configured,
+        fallbackCandidates: _simulatePathFallbackCandidates,
+      );
+      if (resolved == null) {
+        _appendLog('模拟输入文件不存在: $configured');
+        return;
+      }
+      if (resolved != configured) {
+        _simulatePathController.text = resolved;
+      }
+
       _client.openSimulateSerial(
-        simulateFile: _simulatePathController.text.trim(),
+        simulateFile: resolved,
         baudrate: 115200,
       );
       return;
@@ -211,6 +245,94 @@ class _HomePageState extends State<_HomePage> {
       return;
     }
     _client.listPorts();
+  }
+
+  void _bootstrapLaunchConfig() {
+    final resolvedCore = _resolveExistingFilePath(
+      _coreScriptController.text,
+      fallbackCandidates: _coreScriptPathFallbackCandidates,
+    );
+    if (resolvedCore != null) {
+      _coreScriptController.text = resolvedCore;
+    }
+
+    final resolvedSimulate = _resolveExistingFilePath(
+      _simulatePathController.text,
+      fallbackCandidates: _simulatePathFallbackCandidates,
+    );
+    if (resolvedSimulate != null) {
+      _simulatePathController.text = resolvedSimulate;
+    }
+  }
+
+  String? _validateLaunchConfig() {
+    final errors = <String>[];
+    if (_pythonPathController.text.trim().isEmpty) {
+      errors.add('Python 命令不能为空');
+    }
+
+    final configuredCore = _coreScriptController.text.trim();
+    final resolvedCore = _resolveExistingFilePath(
+      configuredCore,
+      fallbackCandidates: _coreScriptPathFallbackCandidates,
+    );
+    if (resolvedCore == null) {
+      errors.add('无法找到 core_service.py');
+    } else if (resolvedCore != configuredCore) {
+      _coreScriptController.text = resolvedCore;
+    }
+
+    if (_simulateMode) {
+      final configuredSimulate = _simulatePathController.text.trim();
+      final resolvedSimulate = _resolveExistingFilePath(
+        configuredSimulate,
+        fallbackCandidates: _simulatePathFallbackCandidates,
+      );
+      if (resolvedSimulate == null) {
+        errors.add('无法找到 simulate_input.txt');
+      } else if (resolvedSimulate != configuredSimulate) {
+        _simulatePathController.text = resolvedSimulate;
+      }
+    }
+
+    if (errors.isEmpty) {
+      return null;
+    }
+    return errors.join('；');
+  }
+
+  String? _resolveExistingFilePath(
+    String configured, {
+    List<String> fallbackCandidates = const <String>[],
+  }) {
+    final candidates = <String>[configured, ...fallbackCandidates];
+    for (final raw in candidates) {
+      final candidate = raw.trim();
+      if (candidate.isEmpty) {
+        continue;
+      }
+
+      final direct = File(candidate);
+      if (direct.existsSync()) {
+        return direct.path;
+      }
+
+      if (!direct.isAbsolute) {
+        final fromCwd = File(
+          '${Directory.current.path}${Platform.pathSeparator}$candidate',
+        );
+        if (fromCwd.existsSync()) {
+          return fromCwd.path;
+        }
+
+        final exeDir = File(Platform.resolvedExecutable).parent.path;
+        final fromExe = File('$exeDir${Platform.pathSeparator}$candidate');
+        if (fromExe.existsSync()) {
+          return fromExe.path;
+        }
+      }
+    }
+    return null;
   }
 
   void _toggleRecord() {
@@ -707,60 +829,65 @@ class _HomePageState extends State<_HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: <Color>[Color(0xFFF8D3A7), Color(0xFFBDE6D8), Color(0xFFF2EFE9)],
+      backgroundColor: Colors.transparent,
+      body: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: <Color>[Color(0xFFF8D3A7), Color(0xFFBDE6D8), Color(0xFFF2EFE9)],
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final compact = constraints.maxWidth < 1100;
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 1100;
 
-                if (compact) {
-                  return Column(
+                  if (compact) {
+                    return Column(
+                      children: <Widget>[
+                        _buildHeader(),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          child: ListView(
+                            children: <Widget>[
+                              _buildControlPanel(),
+                              const SizedBox(height: 12),
+                              _buildVisualizationPanel(),
+                              const SizedBox(height: 12),
+                              SizedBox(height: 360, child: _buildLogPanel()),
+                            ],
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      _buildHeader(),
-                      const SizedBox(height: 12),
+                      SizedBox(width: 380, child: _buildControlPanel()),
+                      const SizedBox(width: 12),
                       Expanded(
-                        child: ListView(
+                        child: Column(
                           children: <Widget>[
-                            _buildControlPanel(),
+                            _buildHeader(),
                             const SizedBox(height: 12),
-                            _buildVisualizationPanel(),
+                            SizedBox(height: 280, child: _buildVisualizationPanel()),
                             const SizedBox(height: 12),
-                            SizedBox(height: 360, child: _buildLogPanel()),
+                            Expanded(child: _buildLogPanel()),
                           ],
                         ),
                       ),
                     ],
                   );
-                }
-
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    SizedBox(width: 380, child: _buildControlPanel()),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        children: <Widget>[
-                          _buildHeader(),
-                          const SizedBox(height: 12),
-                          SizedBox(height: 280, child: _buildVisualizationPanel()),
-                          const SizedBox(height: 12),
-                          Expanded(child: _buildLogPanel()),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
+                },
+              ),
             ),
           ),
         ),
@@ -769,55 +896,72 @@ class _HomePageState extends State<_HomePage> {
   }
 
   Widget _buildHeader() {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 280),
-      curve: Curves.easeOutCubic,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: const Color(0xFF0F7B7B).withValues(alpha: 0.2),
+    return DragToMoveArea(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.82),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: const Color(0xFF0F7B7B).withValues(alpha: 0.2),
+          ),
         ),
-      ),
-      child: Row(
-        children: <Widget>[
-          const Icon(Icons.radar, size: 28, color: Color(0xFF0F7B7B)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  'OFDM Host · Flutter 控制台',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: const Color(0xFF102A43),
-                      ),
-                ),
-                const SizedBox(height: 4),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 250),
-                  child: Text(
-                    _statusText,
-                    key: ValueKey<String>(_statusText),
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          color: const Color(0xFF334E68),
+        child: Row(
+          children: <Widget>[
+            const Icon(Icons.radar, size: 28, color: Color(0xFF0F7B7B)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'OFDM Host · Flutter 控制台',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: const Color(0xFF102A43),
                         ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 4),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 250),
+                    child: Text(
+                      _statusText,
+                      key: ValueKey<String>(_statusText),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: const Color(0xFF334E68),
+                          ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          _metricChip('丢包', _packetLoss.toString(),
-              background: _packetLoss > 0
-                  ? const Color(0xFF9E2A2B)
-                  : const Color(0xFF102A43)),
-          const SizedBox(width: 8),
-          _metricChip('offset', _lastOffset?.toStringAsFixed(6) ?? '--'),
-          const SizedBox(width: 8),
-          _metricChip('delay', _lastDelay?.toStringAsFixed(6) ?? '--'),
-        ],
+            _metricChip('丢包', _packetLoss.toString(),
+                background: _packetLoss > 0
+                    ? const Color(0xFF9E2A2B)
+                    : const Color(0xFF102A43)),
+            const SizedBox(width: 8),
+            _metricChip('offset', _lastOffset?.toStringAsFixed(6) ?? '--'),
+            const SizedBox(width: 8),
+            _metricChip('delay', _lastDelay?.toStringAsFixed(6) ?? '--'),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: '关闭',
+              style: IconButton.styleFrom(
+                backgroundColor: const Color(0xFF9E2A2B).withValues(alpha: 0.9),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: () async {
+                await windowManager.close();
+              },
+              icon: const Icon(Icons.close_rounded, size: 16),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -910,7 +1054,27 @@ class _HomePageState extends State<_HomePage> {
               DropdownButtonFormField<String>(
                 key: ValueKey<String?>(_selectedPort),
                 initialValue: _selectedPort,
-                decoration: const InputDecoration(labelText: '串口'),
+                decoration: InputDecoration(
+                  labelText: '串口',
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.72),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(
+                      color: const Color(0xFF0F7B7B).withValues(alpha: 0.22),
+                    ),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF0F7B7B),
+                      width: 1.5,
+                    ),
+                  ),
+                ),
                 items: _ports
                     .map((port) => DropdownMenuItem<String>(
                           value: port,

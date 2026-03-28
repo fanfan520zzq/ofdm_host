@@ -34,6 +34,7 @@
 - 已打通启动确认、串口列表、心跳、正常关闭
 - Phase 2 已完成：串口开关、实时事件流、record.start/stop 记录落盘
 - Phase 3 已完成：实时双波形、离线分析、导出策略、双轴量程与日志性能优化已接入
+- Phase 4 进行中：已落地 preflight、自检启动脚本、发布构建脚本与发布指南
 - 已创建 Flutter 前端壳工程：`flutter_ui/`
 - 现在仍可继续使用原有主程序 `main.py` 进行采集
 
@@ -72,6 +73,15 @@ Flutter 壳界面当前已支持：
 - 导出离线分析结果（TXT / JSON）
 - 自定义离线分析导出目录
 - 导出命名模板与重名策略（自动重命名 / 覆盖 / 跳过）
+
+Phase 4 工程脚本：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\run_phase4_dev.ps1
+powershell -ExecutionPolicy Bypass -File .\tools\build_phase4_release.ps1
+```
+
+发布流程文档：`doc/phase4_release_guide.md`
 
 ## 自动版本留痕（每次大改）
 

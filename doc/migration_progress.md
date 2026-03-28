@@ -10,7 +10,7 @@
 - [x] 阶段 1：协议与骨架（已完成）
 - [x] 阶段 2：采集闭环 MVP（已完成）
 - [x] 阶段 3：数据可视化与统计（已完成）
-- [ ] 阶段 4：工程化与发布
+- [ ] 阶段 4：工程化与发布（进行中，step1 + 调试收敛已完成）
 - [ ] 阶段 5：灰度替换
 
 ## 阶段 1 交付清单
@@ -37,8 +37,8 @@
 - 新增 Flutter 前端壳工程（`flutter_ui/`）：连接控制 + 实时事件流 + 指标卡片
 
 ## 下一步（阶段 4）
-1. 完成 Flutter + Python 一体化启动脚本与路径自检
-2. 完成工程化打包联调（PyInstaller + Flutter 运行依赖整合）
+1. 完成发布包实机验收（目标机器环境验证 + 启动参数固化）
+2. 完成工程化打包联调（PyInstaller 旧链路与 Flutter 新链路并行验证）
 3. 建立灰度切换与回滚验证清单（为阶段 5 做准备）
 
 ## Phase 3（启动）已落地能力
@@ -57,3 +57,17 @@
 7. 导出已支持命名模板与重名策略（自动重命名 / 覆盖 / 跳过）
 8. 固定量程下已支持 offset / delay 独立坐标配置
 9. 日志渲染已支持缓存过滤与限量展示（高流量性能优化）
+
+## Phase 4（step1）已落地能力
+1. 新增 `tools/phase4_preflight.py`，统一发布前自检（关键文件 + Python/Flutter/PyInstaller）
+2. 新增 `tools/run_phase4_dev.ps1`，统一开发联调启动入口（preflight + flutter run）
+3. 新增 `tools/build_phase4_release.ps1`，统一发布构建入口（preflight + analyze/test/build + bundle）
+4. 新增 `doc/phase4_release_guide.md`，沉淀工程化流程和发布目录说明
+5. Flutter UI 增加启动前路径自检与自动回退（core_service/simulate_input）
+
+## Phase 4（调试与验收收敛）已落地能力
+1. 修复 preflight 在 Windows 下的编码问题（UTF-8 + errors='replace'）。
+2. 修复发布脚本中 bat 引号解析与 exe 自动选择逻辑。
+3. 完成完整 release 构建并验证 `dist/phase4_bundle/` 产物完整性。
+4. 完成窗口一体化 UI 调整：隐藏原生标题栏、顶部拖动 + 关闭按钮、串口大圆角。
+5. 完成窗口外边界圆角裁剪（radius=20）与透明背景配合。

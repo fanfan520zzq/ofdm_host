@@ -35,7 +35,8 @@
 - 新增后台服务入口：`core_service.py`
 - 已能完成启动确认、串口列表查询、心跳保活、正常关闭
 - Phase 2 已完成：支持 `serial.open/close`、实时事件流、`record.start/stop` 记录落盘
-- Phase 3 已启动：支持实时 offset/delay 双波形、日志过滤、历史文件离线分析
+- Phase 3 已完成：支持实时双波形、离线分析、导出策略与高流量日志优化
+- Phase 4 进行中：已落地启动前自检、工程化启动脚本与发布构建脚本
 - 已创建 Flutter 前端壳工程：`flutter_ui/`
 - 现有主程序 `main.py` 仍可按原方式使用
 
@@ -45,11 +46,12 @@
 - 阶段进度看板：`doc/migration_progress.md`
 - 协议细节（给开发同学）：`doc/ipc_protocol_v1.md`
 
-## 迁移目标完成度（截至 v0.6.3）
+## 迁移目标完成度（截至 v0.7.3）
 
 - 总目标：Flutter 前端 + Python Core Service + JSON Lines IPC
 - 已完成阶段：阶段 0、阶段 1、阶段 2、阶段 3
-- 待开始阶段：阶段 4（工程化与发布）、阶段 5（灰度替换）
+- 进行中阶段：阶段 4（工程化与发布，step1 + 调试验收阶段已落地）
+- 待开始阶段：阶段 5（灰度替换）
 
 当前已完成的关键能力：
 - Python Core 支持服务启动/关闭、心跳、串口开关、记录控制、文件分析
@@ -57,12 +59,35 @@
 - 离线分析支持 TXT/JSON 导出、导出目录与导出命名模板配置、重名覆盖策略
 - 波形支持自动/固定量程切换，并支持固定量程下 offset/delay 独立坐标配置
 - 日志高亮已支持缓存过滤与限量渲染，提升高流量场景性能
+- 已新增 Phase 4 工程脚本：preflight 自检、开发联调一键启动、发布构建与 bundle 清单生成
+- Flutter UI 新增启动前路径自检与自动回退（core/simulate 路径）
+- 已完成 Phase 4 调试收敛：Windows 编码问题修复、构建脚本引号与 exe 选择逻辑修复
+- 已完成窗口一体化 UI 迭代：隐藏原生标题栏、顶部拖动与关闭按钮、串口大圆角、窗口外边界圆角裁剪
 
 距离 README 目标仍待完成的步骤：
-1. Phase 4：工程化发布（打包整合、启动与路径配置、发布流程）
+1. Phase 4：完成发布包实机验收与部署文档收敛
 2. Phase 5：灰度替换（并行运行、回滚预案、最终切换）
 
 UI 现状基线文档：`ui.md`（后续 UI 修改将直接更新该文档）
+
+## Phase 里程碑记录（含调试阶段）
+
+- Phase 1（v0.2.0）：完成 Python Core Service 骨架与 IPC v1 协议。
+- Phase 2 启动（v0.3.0）：完成串口打开/关闭与实时事件流（text/hex/指标）打通。
+- Phase 2 UI 壳（v0.4.0）：完成 Flutter 前端壳工程与基础控制面板联调。
+- Phase 2 收尾（v0.5.0）：完成 `record.start/stop` 记录闭环与落盘输出。
+- Phase 3 启动（v0.6.0）：完成实时双波形与离线分析链路接入。
+- Phase 3 step2（v0.6.1）：完成分析导出、波形时间窗/Y 缩放、日志关键词高亮。
+- Phase 3 step3（v0.6.2）：完成导出目录配置与波形自动/固定量程切换。
+- Phase 3 step4（v0.6.3）：完成导出命名模板与重名策略、固定量程双轴独立配置、日志高流量渲染优化。
+- Phase 4 step1（v0.7.0）：完成 preflight 自检脚本、开发/发布脚本、启动前路径自检与发布指南。
+- Phase 4 调试与验收收敛（v0.7.1-v0.7.3）：
+	- 修复 preflight 在 Windows 下的编码异常（UTF-8 + errors=replace）。
+	- 修复发布脚本中的 bat 引号解析与 exe 选择逻辑问题。
+	- 完成完整 release 构建并验证 `dist/phase4_bundle/` 目录结构。
+	- 完成窗口一体化 UI 收敛：隐藏原生标题栏、顶部拖动+关闭按钮、串口大圆角、窗口外边界圆角裁剪（radius=20）。
+- Phase 4 后续（step2）：目标机实机验收与部署文档收敛。
+- Phase 5（待启动）：灰度替换、并行运行验证、回滚策略闭环。
 
 ## 如果你只关心日常使用
 
@@ -78,7 +103,13 @@ UI 现状基线文档：`ui.md`（后续 UI 修改将直接更新该文档）
 python core_service.py
 ```
 
-Flutter 前端壳工程（Phase 3-Start）启动方式：
+Flutter 前端壳工程（Phase 4）推荐启动方式：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\run_phase4_dev.ps1
+```
+
+也可继续手动启动：
 
 ```bash
 cd flutter_ui
@@ -88,6 +119,14 @@ flutter run -d windows
 ```
 
 说明：当前仓库已提供 Flutter 代码骨架；若本机未安装 Flutter SDK，请先安装 Flutter。
+
+发布构建（生成 `dist/phase4_bundle/`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_phase4_release.ps1
+```
+
+发布流程详见：`doc/phase4_release_guide.md`
 
 联调时可在 Flutter 界面直接操作：
 - 启动/停止 Python Core Service
@@ -158,14 +197,18 @@ ofdm_host/
 ├── flutter_exit.txt
 ├── ofdm_host - 快捷方式.lnk
 ├── tools/
-│   └── migration_checkpoint.py
+│   ├── migration_checkpoint.py
+│   ├── phase4_preflight.py
+│   ├── run_phase4_dev.ps1
+│   └── build_phase4_release.ps1
 ├── doc/
 │   ├── README.md
 │   ├── FLCLASH_UI_技术栈总结.md
 │   ├── ipc_protocol_v1.md
 │   ├── migration_progress.md
 │   ├── migration_changelog.md
-│   └── migration_plan_vibecoding.md
+│   ├── migration_plan_vibecoding.md
+│   └── phase4_release_guide.md
 ├── flutter_ui/
 │   ├── pubspec.yaml
 │   ├── lib/main.dart
@@ -209,6 +252,9 @@ ofdm_host/
 
 - `tools/`：迁移流程工具脚本。
 	- `migration_checkpoint.py`：自动做版本号升级、changelog 追加、git 提交与 tag。
+	- `phase4_preflight.py`：Phase 4 发布前自检（关键文件、Python/Flutter/PyInstaller）。
+	- `run_phase4_dev.ps1`：一键联调脚本（preflight + flutter run）。
+	- `build_phase4_release.ps1`：一键发布构建（preflight + analyze/test/build + bundle）。
 - `doc/`：迁移和技术文档目录。
 	- `README.md`：文档总览入口。
 	- `FLCLASH_UI_技术栈总结.md`：UI 技术栈调研笔记（历史参考）。
@@ -216,6 +262,7 @@ ofdm_host/
 	- `migration_progress.md`：阶段进度与下一步计划。
 	- `migration_changelog.md`：每次迁移 checkpoint 的变更记录。
 	- `migration_plan_vibecoding.md`：完整迁移方案与风险评估。
+	- `phase4_release_guide.md`：Phase 4 开发联调与发布构建指南。
 - `flutter_ui/`：Flutter 桌面前端工程。
 	- `lib/main.dart`：Flutter 入口。
 	- `lib/src/app.dart`：主页面 UI、交互逻辑、波形/日志/分析面板。

@@ -1,4 +1,4 @@
-# Flutter UI Shell（Phase 3-Start）
+# Flutter UI Shell（Phase 4）
 
 这是 OFDM Host 的 Flutter 前端壳工程（迁移中的 UI 层）。
 
@@ -14,30 +14,38 @@
 - 已支持离线分析结果导出（TXT / JSON）
 - 已支持离线分析导出目录配置
 - 已支持导出命名模板与重名策略（自动重命名 / 覆盖 / 跳过）
+- 已支持启动前路径自检（core_service.py / simulate_input.txt）
+- 已支持路径自动回退（默认尝试 `core_service.py`、`../core_service.py`、`python_core/core_service.py`）
 - 已可对接 Python `core_service.py`
 - 后端串口和算法仍由 Python 负责
 
 ## 本地启动（需要先安装 Flutter SDK）
 
-1. 进入目录
+1. 推荐：从仓库根目录一键启动
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\run_phase4_dev.ps1
+```
+
+2. 手动方式：进入目录
 
 ```bash
 cd flutter_ui
 ```
 
-2. 如果你本机还没有 platform 目录（windows/android 等），先补齐
+3. 如果你本机还没有 platform 目录（windows/android 等），先补齐
 
 ```bash
 flutter create .
 ```
 
-3. 获取依赖
+4. 获取依赖
 
 ```bash
 flutter pub get
 ```
 
-4. 运行
+5. 运行
 
 ```bash
 flutter run -d windows
@@ -51,8 +59,13 @@ flutter run -d windows
 
 可以在界面里直接改这 3 项。
 
+如果默认路径不存在，启动前会自动尝试：
+
+- `core_service.py` / `../core_service.py` / `python_core/core_service.py`
+- `simulate_input.txt` / `../simulate_input.txt` / `python_core/simulate_input.txt`
+
 ## 说明
 
-- 当前已完成 Phase 3 的 UI 收尾能力，可覆盖实时可视化、离线分析和导出策略场景。
+- 当前已完成 Phase 3 的 UI 收尾能力，并进入 Phase 4 工程化联调阶段。
 - 界面可直接触发 `record.start` / `record.stop`，并展示记录文件路径。
-- 下一阶段进入 Phase 4（工程化发布与打包联调）。
+- 发布构建可使用 `tools/build_phase4_release.ps1` 生成 `dist/phase4_bundle/`。

@@ -4,14 +4,16 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, QTimer, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QPointF, QThread, QTimer, QUrl
+from PyQt6.QtGui import QColor, QDesktopServices, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFormLayout,
+    QFrame,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -29,13 +31,91 @@ from serial_reader import SerialWorker, SimulateWorker, load_simulate_input
 from process_data import parse_file, calc_stats_with_trim
 
 
+class OffsetWaveformWidget(QWidget):
+    """offset 波形显示控件（轻量自绘）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.samples: list[float] = []
+        self.setMinimumHeight(220)
+
+    def append_sample(self, value: float) -> None:
+        self.samples.append(value)
+        self.update()
+
+    def clear_samples(self) -> None:
+        self.samples.clear()
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.fillRect(rect, QColor("#ffffff"))
+        painter.setPen(QPen(QColor("#d7deeb"), 1))
+        painter.drawRoundedRect(rect, 8, 8)
+
+        plot = rect.adjusted(12, 12, -12, -12)
+        if plot.width() <= 0 or plot.height() <= 0:
+            return
+
+        painter.setPen(QPen(QColor("#edf1f7"), 1))
+        grid_count = 8
+        for i in range(1, grid_count):
+            x = int(plot.left() + i * plot.width() / grid_count)
+            y = int(plot.top() + i * plot.height() / grid_count)
+            painter.drawLine(x, plot.top(), x, plot.bottom())
+            painter.drawLine(plot.left(), y, plot.right(), y)
+
+        painter.setPen(QPen(QColor("#9fb7d9"), 1))
+        painter.drawLine(plot.left(), plot.center().y(), plot.right(), plot.center().y())
+
+        if len(self.samples) < 2:
+            painter.setPen(QPen(QColor("#97a6ba"), 1))
+            painter.drawText(plot, 0x84, "等待 offset 数据...")
+            return
+
+        max_abs = max(max(abs(v) for v in self.samples), 0.001)
+        values = self.samples
+        max_points = max(plot.width(), 2)
+        if len(values) > max_points:
+            step = len(values) / max_points
+            sampled = []
+            idx = 0.0
+            while int(idx) < len(values):
+                sampled.append(values[int(idx)])
+                idx += step
+            if sampled[-1] != values[-1]:
+                sampled.append(values[-1])
+            values = sampled
+
+        n = len(values)
+        polygon = QPolygonF()
+        for i, val in enumerate(values):
+            x = plot.left() + i * plot.width() / (n - 1)
+            y_ratio = (val + max_abs) / (2 * max_abs)
+            y = plot.bottom() - y_ratio * plot.height()
+            polygon.append(QPointF(float(x), float(y)))
+
+        painter.setPen(QPen(QColor("#2f86ff"), 1.8))
+        painter.drawPolyline(polygon)
+
+        painter.setPen(QPen(QColor("#6b7d96"), 1))
+        painter.drawText(
+            plot.adjusted(0, 0, -6, -6),
+            0x82,
+            f"offset min={min(self.samples):.6f} max={max(self.samples):.6f}",
+        )
+
+
 class MainWindow(QMainWindow):
     """主窗口：串口选择、记录控制、状态显示。"""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("串口数据读取")
-        self.resize(500, 200)
+        self.setWindowTitle("串口上位机")
+        self.resize(1120, 760)
 
         self._thread: QThread | None = None
         self._worker: SerialWorker | None = None
@@ -58,36 +138,46 @@ class MainWindow(QMainWindow):
         self._packet_loss_count: int = 0
 
         self._setup_ui()
+        self._apply_styles()
         self._refresh_ports()
 
     def _setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        root_layout = QHBoxLayout(central)
+        root_layout.setContentsMargins(16, 16, 16, 16)
+        root_layout.setSpacing(14)
 
-        # 串口与波特率
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("串口:"))
+        # 左侧控制面板
+        left_card = QFrame()
+        left_card.setObjectName("leftCard")
+        left_card.setMinimumWidth(320)
+        left_card.setMaximumWidth(380)
+        left_layout = QVBoxLayout(left_card)
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(12)
+
+        title = QLabel("连接控制")
+        title.setObjectName("panelTitle")
+        left_layout.addWidget(title)
+
+        serial_card = QFrame()
+        serial_card.setObjectName("groupCard")
+        serial_form = QFormLayout(serial_card)
+        serial_form.setContentsMargins(10, 10, 10, 10)
+        serial_form.setHorizontalSpacing(10)
+        serial_form.setVerticalSpacing(10)
+
         self.port_combo = QComboBox()
         self.port_combo.setMinimumWidth(120)
-        row1.addWidget(self.port_combo)
-        row1.addWidget(QLabel("波特率:"))
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"])
         self.baud_combo.setCurrentText("115200")
-        row1.addWidget(self.baud_combo)
-        layout.addLayout(row1)
-
-        # 定时输入
-        row_timer = QHBoxLayout()
-        row_timer.addWidget(QLabel("定时(秒):"))
         self.timer_spin = QSpinBox()
         self.timer_spin.setMinimum(0)
-        self.timer_spin.setMaximum(24*60*60)  # 最多24小时
+        self.timer_spin.setMaximum(24 * 60 * 60)
         self.timer_spin.setValue(0)
         self.timer_spin.setToolTip("0为不限时")
-        row_timer.addWidget(self.timer_spin)
-        row_timer.addWidget(QLabel("剔除前(%):"))
         self.trim_percent_spin = QDoubleSpinBox()
         self.trim_percent_spin.setMinimum(0.0)
         self.trim_percent_spin.setMaximum(20.0)
@@ -95,75 +185,169 @@ class MainWindow(QMainWindow):
         self.trim_percent_spin.setSingleStep(0.1)
         self.trim_percent_spin.setValue(1.0)
         self.trim_percent_spin.setToolTip("数据处理时剔除头部毛刺比例")
-        row_timer.addWidget(self.trim_percent_spin)
-        row_timer.addStretch()
-        layout.addLayout(row_timer)
+
+        serial_form.addRow("串口", self.port_combo)
+        serial_form.addRow("波特率", self.baud_combo)
+        serial_form.addRow("定时(秒)", self.timer_spin)
+        serial_form.addRow("剔除前(%)", self.trim_percent_spin)
+        left_layout.addWidget(serial_card)
 
         self.check_simulate = QCheckBox("模拟串口模式")
         self.check_simulate.setChecked(False)
-        layout.addWidget(self.check_simulate)
+        left_layout.addWidget(self.check_simulate)
 
-        # 调试环境备注（停止时写入文件顶部注释区）
-        layout.addWidget(QLabel("调试环境备注(停止时自动写入文件顶部):"))
-        self.debug_note_edit = QTextEdit()
-        self.debug_note_edit.setPlaceholderText("例如: 板卡版本/固件版本/天线配置/现场环境/备注...")
-        self.debug_note_edit.setFixedHeight(70)
-        layout.addWidget(self.debug_note_edit)
-
-        # 按钮（合并打开串口+开始记录：点击开始后等待 client start 等就绪信号，再写入 offset/delay）
-        row2 = QHBoxLayout()
+        row_btn = QHBoxLayout()
         self.btn_start = QPushButton("开始")
         self.btn_start.clicked.connect(self._on_start_stop)
-        row2.addWidget(self.btn_start)
-
+        row_btn.addWidget(self.btn_start)
         self.btn_process_data = QPushButton("数据处理")
         self.btn_process_data.clicked.connect(self._on_process_data)
-        row2.addWidget(self.btn_process_data)
-
+        row_btn.addWidget(self.btn_process_data)
         self.btn_open_folder = QPushButton("打开文件夹")
         self.btn_open_folder.clicked.connect(self._on_open_folder)
-        row2.addWidget(self.btn_open_folder)
+        row_btn.addWidget(self.btn_open_folder)
+        left_layout.addLayout(row_btn)
 
-        row2.addStretch()
-        layout.addLayout(row2)
+        status_card = QFrame()
+        status_card.setObjectName("groupCard")
+        status_form = QFormLayout(status_card)
+        status_form.setContentsMargins(10, 10, 10, 10)
+        status_form.setHorizontalSpacing(12)
+        status_form.setVerticalSpacing(8)
 
-        # 状态
-        self.lbl_status = QLabel("状态: 未连接")
-        layout.addWidget(self.lbl_status)
-        self.lbl_bytes = QLabel("已接收: 0 字节")
-        layout.addWidget(self.lbl_bytes)
-        self.lbl_offset = QLabel("offset: --")
-        layout.addWidget(self.lbl_offset)
-        self.lbl_delay = QLabel("delay: --")
-        layout.addWidget(self.lbl_delay)
-        self.lbl_packet_loss = QLabel("丢包: 0")
-        layout.addWidget(self.lbl_packet_loss)
+        self.lbl_status = QLabel("未连接")
+        self.lbl_bytes = QLabel("0 字节")
+        self.lbl_offset = QLabel("--")
+        self.lbl_delay = QLabel("--")
+        self.lbl_packet_loss = QLabel("0")
+        status_form.addRow("状态", self.lbl_status)
+        status_form.addRow("已接收", self.lbl_bytes)
+        status_form.addRow("offset", self.lbl_offset)
+        status_form.addRow("delay", self.lbl_delay)
+        status_form.addRow("丢包", self.lbl_packet_loss)
+        left_layout.addWidget(status_card)
 
-        layout.addWidget(QLabel("实时数据:"))
-        self.live_data_view = QTextEdit()
-        self.live_data_view.setReadOnly(True)
-        self.live_data_view.setPlaceholderText("串口接收数据将实时显示在这里")
-        self.live_data_view.setMinimumHeight(160)
-        self.live_data_view.document().setMaximumBlockCount(400)
-        layout.addWidget(self.live_data_view)
+        note_label = QLabel("调试环境备注")
+        left_layout.addWidget(note_label)
+        self.debug_note_edit = QTextEdit()
+        self.debug_note_edit.setPlaceholderText("例如: 板卡版本/固件版本/天线配置/现场环境/备注...")
+        self.debug_note_edit.setFixedHeight(72)
+        left_layout.addWidget(self.debug_note_edit)
 
-        layout.addStretch()
-
-        # 右下角保存策略设置
-        row_save = QHBoxLayout()
-        row_save.addStretch()
+        save_row = QHBoxLayout()
         self.check_auto_save = QCheckBox("自动保存")
         self.check_auto_save.setChecked(True)
-        row_save.addWidget(self.check_auto_save)
+        save_row.addWidget(self.check_auto_save)
         self.btn_save_setting = QPushButton("保存设置")
         self.btn_save_setting.setFixedWidth(86)
         self.btn_save_setting.clicked.connect(self._on_save_setting)
-        row_save.addWidget(self.btn_save_setting)
-        layout.addLayout(row_save)
+        save_row.addWidget(self.btn_save_setting)
+        save_row.addStretch()
+        left_layout.addLayout(save_row)
 
         self.lbl_save_mode = QLabel("保存模式: 自动保存到项目目录 historydata")
-        self.lbl_save_mode.setStyleSheet("color: #666;")
-        layout.addWidget(self.lbl_save_mode)
+        self.lbl_save_mode.setObjectName("saveModeLabel")
+        left_layout.addWidget(self.lbl_save_mode)
+        left_layout.addStretch()
+
+        # 右侧实时数据区
+        right_card = QFrame()
+        right_card.setObjectName("rightCard")
+        right_layout = QVBoxLayout(right_card)
+        right_layout.setContentsMargins(14, 14, 14, 14)
+        right_layout.setSpacing(10)
+
+        wave_title_row = QHBoxLayout()
+        wave_title = QLabel("offset波形")
+        wave_title.setObjectName("panelTitle")
+        wave_title_row.addWidget(wave_title)
+        wave_title_row.addStretch()
+        btn_clear_wave = QPushButton("清空波形")
+        btn_clear_wave.clicked.connect(self._clear_waveform)
+        wave_title_row.addWidget(btn_clear_wave)
+        right_layout.addLayout(wave_title_row)
+
+        self.waveform_view = OffsetWaveformWidget()
+        right_layout.addWidget(self.waveform_view, 2)
+
+        data_title_row = QHBoxLayout()
+        data_title = QLabel("实时数据")
+        data_title.setObjectName("panelTitle")
+        data_title_row.addWidget(data_title)
+        data_title_row.addStretch()
+        self.live_data_view = QTextEdit()
+        self.live_data_view.setReadOnly(True)
+        self.live_data_view.setPlaceholderText("串口接收数据将实时显示在这里")
+        self.live_data_view.document().setMaximumBlockCount(1200)
+        btn_clear_live = QPushButton("清空")
+        btn_clear_live.clicked.connect(self.live_data_view.clear)
+        data_title_row.addWidget(btn_clear_live)
+        right_layout.addLayout(data_title_row)
+
+        right_layout.addWidget(self.live_data_view, 3)
+
+        root_layout.addWidget(left_card, 1)
+        root_layout.addWidget(right_card, 2)
+
+    def _apply_styles(self):
+        self.setStyleSheet(
+            """
+            QMainWindow, QWidget {
+                background: #f5f7fb;
+                color: #1f2937;
+                font-size: 13px;
+            }
+
+            #leftCard, #rightCard {
+                background: #ffffff;
+                border: 1px solid #d9e1ee;
+                border-radius: 12px;
+            }
+
+            #groupCard {
+                background: #f8fafc;
+                border: 1px solid #e3e8f2;
+                border-radius: 10px;
+            }
+
+            #panelTitle {
+                font-size: 18px;
+                font-weight: 600;
+                color: #1a2433;
+            }
+
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+                background: #ffffff;
+                border: 1px solid #cfd8e6;
+                border-radius: 8px;
+                padding: 6px 8px;
+            }
+
+            QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {
+                border: 1px solid #3b82f6;
+            }
+
+            QPushButton {
+                background: #3b82f6;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 8px 10px;
+            }
+
+            QPushButton:hover {
+                background: #2563eb;
+            }
+
+            QPushButton:pressed {
+                background: #1d4ed8;
+            }
+
+            #saveModeLabel {
+                color: #6b7280;
+            }
+            """
+        )
 
     def _refresh_ports(self):
         self.port_combo.clear()
@@ -178,6 +362,7 @@ class MainWindow(QMainWindow):
         r"client\s+start!?|join\s+NET\s+success|INF:.*HASCH.*Init\s+OK!?|Time\s+Slot\s+index",
         re.IGNORECASE,
     )
+    _OFFSET_PATTERN = re.compile(r"offset\s*:\s*([\-\d.]+)", re.IGNORECASE)
 
     def _on_start_stop(self):
         if self._worker and self._thread and self._thread.isRunning():
@@ -276,7 +461,7 @@ class MainWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         self._thread.start()
 
-        self.lbl_status.setText("状态: 模拟串口已连接，等待设备就绪...")
+        self.lbl_status.setText("模拟串口已连接，等待设备就绪...")
         self.btn_start.setText("停止")
         self.btn_start.setEnabled(True)
         self.port_combo.setEnabled(False)
@@ -307,7 +492,7 @@ class MainWindow(QMainWindow):
         self._thread.started.connect(self._worker.run)
         self._thread.start()
 
-        self.lbl_status.setText("状态: 连接中...")
+        self.lbl_status.setText("连接中...")
         self.btn_start.setText("停止")
         self.btn_start.setEnabled(True)
         self.port_combo.setEnabled(False)
@@ -317,10 +502,10 @@ class MainWindow(QMainWindow):
 
     def _on_connected(self):
         if self._simulate_mode:
-            self.lbl_status.setText("状态: 模拟串口已连接，等待设备就绪...")
+            self.lbl_status.setText("模拟串口已连接，等待设备就绪...")
             self._append_live_line("系统", "模拟串口已连接，等待设备就绪")
         else:
-            self.lbl_status.setText("状态: 已连接，等待设备就绪...")
+            self.lbl_status.setText("已连接，等待设备就绪...")
             self._append_live_line("系统", "串口已连接，等待设备就绪")
 
     def _append_live_line(self, tag: str, content: str, ts: str | None = None) -> None:
@@ -339,6 +524,22 @@ class MainWindow(QMainWindow):
             line = line.strip("\r")
             if line:
                 self._append_live_line("RX", line, ts=ts)
+                # 未进入记录流程时，也尝试从实时文本中抽取 offset 画图
+                if not self._recording:
+                    self._try_append_offset_from_text(line)
+
+    def _clear_waveform(self) -> None:
+        self.waveform_view.clear_samples()
+
+    def _try_append_offset_from_text(self, text: str) -> None:
+        m = self._OFFSET_PATTERN.search(text)
+        if not m:
+            return
+        try:
+            value = float(m.group(1))
+        except ValueError:
+            return
+        self.waveform_view.append_sample(value)
 
     def _close_serial(self, manual_stop: bool = False):
         closed_record_path = self._record_path if self._recording else None
@@ -353,9 +554,9 @@ class MainWindow(QMainWindow):
             self._thread.wait(1000)
         self._thread = None
         self._worker = None
-        self.lbl_status.setText("状态: 未连接")
-        self.lbl_offset.setText("offset: --")
-        self.lbl_delay.setText("delay: --")
+        self.lbl_status.setText("未连接")
+        self.lbl_offset.setText("--")
+        self.lbl_delay.setText("--")
         self.btn_start.setText("开始")
         self.port_combo.setEnabled(True)
         self.baud_combo.setEnabled(True)
@@ -449,8 +650,8 @@ class MainWindow(QMainWindow):
             self._waiting_trigger = False
             self._delay_baseline = None
             self._packet_loss_count = 0
-            self.lbl_packet_loss.setText("丢包: 0")
-            self.lbl_status.setText("状态: 已就绪，正在记录 offset/delay")
+            self.lbl_packet_loss.setText("0")
+            self.lbl_status.setText("已就绪，正在记录 offset/delay")
             self._append_live_line("系统", f"设备就绪，开始记录。设备={self._current_port} 波特率={baud}", ts=ts)
 
             # 启动定时器（支持模拟模式）
@@ -501,9 +702,13 @@ class MainWindow(QMainWindow):
             except ValueError:
                 pass
             self._file_handle.write(f"[{ts}] offset:{off_val}  delay:{delay_out}\n")
-            self.lbl_offset.setText(f"offset: {off_val}")
-            self.lbl_delay.setText(f"delay: {delay_out}")
+            self.lbl_offset.setText(off_val)
+            self.lbl_delay.setText(delay_out)
             self._append_live_line("解析", f"offset:{off_val}  delay:{delay_out}", ts=ts)
+            try:
+                self.waveform_view.append_sample(float(off_val))
+            except ValueError:
+                pass
             pos = m.end()
         remain = buf[pos:] if pos < len(buf) else ""
         lines = remain.split("\n")
@@ -522,7 +727,7 @@ class MainWindow(QMainWindow):
             only_delay = has_delay and not has_offset
             if line.strip() == "10":
                 self._packet_loss_count += 1
-                self.lbl_packet_loss.setText(f"丢包: {self._packet_loss_count}")
+                self.lbl_packet_loss.setText(str(self._packet_loss_count))
                 self._file_handle.write(f"[{ts}] PACKET_LOSS: 10\n")
                 self._append_live_line("告警", "PACKET_LOSS: 10", ts=ts)
                 continue
@@ -536,7 +741,7 @@ class MainWindow(QMainWindow):
 
     def _on_data_received(self, data: bytes):
         self._byte_count += len(data)
-        self.lbl_bytes.setText(f"已接收: {self._byte_count} 字节")
+        self.lbl_bytes.setText(f"{self._byte_count} 字节")
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         if self._recording and self._raw_file_handle:
             try:
@@ -604,7 +809,7 @@ class MainWindow(QMainWindow):
         self._live_text_buffer = ""
         self._delay_baseline = None
         self._packet_loss_count = 0
-        self.lbl_packet_loss.setText("丢包: 0")
+        self.lbl_packet_loss.setText("0")
 
     def closeEvent(self, event):
         self._close_serial(manual_stop=False)
