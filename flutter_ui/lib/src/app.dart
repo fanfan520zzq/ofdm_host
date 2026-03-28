@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -41,7 +42,9 @@ class _HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<_HomePage> {
-  static const int _maxWavePoints = 420;
+  static const int _defaultWaveWindowPoints = 420;
+  static const int _maxWaveBufferPoints = 2400;
+  static const List<int> _waveWindowOptions = <int>[120, 240, 420, 800, 1200];
 
   final CoreServiceClient _client = CoreServiceClient();
 
@@ -81,8 +84,11 @@ class _HomePageState extends State<_HomePage> {
 
   int _packetLoss = 0;
   double _analysisTrimRatio = 0.01;
+  int _waveWindowPoints = _defaultWaveWindowPoints;
+  double _waveZoomY = 1.0;
   double? _lastOffset;
   double? _lastDelay;
+  String? _analysisExportPath;
 
   String _statusText = '未连接';
   String _analysisHint = '尚未分析历史文件';
@@ -212,6 +218,7 @@ class _HomePageState extends State<_HomePage> {
     setState(() {
       _analysisLoading = true;
       _analysisHint = '分析中...';
+      _analysisExportPath = null;
     });
 
     _client.processFile(
@@ -328,6 +335,7 @@ class _HomePageState extends State<_HomePage> {
         setState(() {
           _analysisLoading = false;
           _analysisResult = event.payload;
+          _analysisExportPath = null;
           final hasData = event.payload['has_data'] == true;
           _analysisHint = hasData
               ? '分析完成'
@@ -357,8 +365,8 @@ class _HomePageState extends State<_HomePage> {
 
   void _appendWavePoint(List<double> series, double value) {
     series.add(value);
-    if (series.length > _maxWavePoints) {
-      series.removeRange(0, series.length - _maxWavePoints);
+    if (series.length > _maxWaveBufferPoints) {
+      series.removeRange(0, series.length - _maxWaveBufferPoints);
     }
   }
 
@@ -378,6 +386,22 @@ class _HomePageState extends State<_HomePage> {
       return '--';
     }
     return d.toStringAsFixed(digits);
+  }
+
+  String _fmtInt(Object? value) {
+    if (value is int) {
+      return value.toString();
+    }
+    if (value is num) {
+      return value.toInt().toString();
+    }
+    if (value is String) {
+      final parsed = int.tryParse(value);
+      if (parsed != null) {
+        return parsed.toString();
+      }
+    }
+    return '--';
   }
 
   void _appendLog(String line) {
@@ -425,6 +449,141 @@ class _HomePageState extends State<_HomePage> {
       max: maxVal,
       count: values.length,
     );
+  }
+
+  List<double> _tailPoints(List<double> values) {
+    if (values.length <= _waveWindowPoints) {
+      return values;
+    }
+    return values.sublist(values.length - _waveWindowPoints);
+  }
+
+  Future<void> _exportAnalysisAsJson() async {
+    final payload = _analysisResult;
+    if (payload == null) {
+      _appendLog('无可导出的分析结果');
+      return;
+    }
+
+    try {
+      final dir = Directory('analysis_exports');
+      await dir.create(recursive: true);
+
+      final ts = _safeFileTimestamp(DateTime.now());
+      final path = '${dir.path}${Platform.pathSeparator}analysis_$ts.json';
+      final file = File(path);
+      await file.writeAsString(
+        const JsonEncoder.withIndent('  ').convert(payload),
+        flush: true,
+      );
+
+      setState(() {
+        _analysisExportPath = path;
+        _analysisHint = '已导出 JSON';
+      });
+      _appendLog('analysis.exported.json: $path');
+    } catch (e) {
+      _appendLog('导出 JSON 失败: $e');
+    }
+  }
+
+  Future<void> _exportAnalysisAsText() async {
+    final payload = _analysisResult;
+    if (payload == null) {
+      _appendLog('无可导出的分析结果');
+      return;
+    }
+
+    try {
+      final dir = Directory('analysis_exports');
+      await dir.create(recursive: true);
+
+      final ts = _safeFileTimestamp(DateTime.now());
+      final path = '${dir.path}${Platform.pathSeparator}analysis_$ts.txt';
+      final file = File(path);
+      await file.writeAsString(_buildAnalysisSummaryText(payload), flush: true);
+
+      setState(() {
+        _analysisExportPath = path;
+        _analysisHint = '已导出文本摘要';
+      });
+      _appendLog('analysis.exported.txt: $path');
+    } catch (e) {
+      _appendLog('导出文本失败: $e');
+    }
+  }
+
+  String _buildAnalysisSummaryText(Map<String, dynamic> payload) {
+    final buffer = StringBuffer();
+    final hasData = payload['has_data'] == true;
+    final offsetStats = payload['offset_stats'];
+    final delayStats = payload['delay_stats'];
+
+    buffer.writeln('OFDM Host Analysis Export');
+    buffer.writeln('generated_at: ${DateTime.now().toIso8601String()}');
+    buffer.writeln('file_path: ${payload['file_path'] ?? '--'}');
+    buffer.writeln('trim_ratio: ${payload['trim_ratio'] ?? '--'}');
+    buffer.writeln('has_data: $hasData');
+
+    if (!hasData) {
+      buffer.writeln('message: ${payload['message'] ?? '未找到有效数据'}');
+      return buffer.toString();
+    }
+
+    buffer.writeln('offset.mean: ${_fmtNum(offsetStats is Map ? offsetStats['mean'] : null)}');
+    buffer.writeln('offset.min: ${_fmtNum(offsetStats is Map ? offsetStats['min'] : null)}');
+    buffer.writeln('offset.max: ${_fmtNum(offsetStats is Map ? offsetStats['max'] : null)}');
+    buffer.writeln('offset.used_count: ${_fmtInt(offsetStats is Map ? offsetStats['used_count'] : null)}');
+
+    buffer.writeln('delay.mean: ${_fmtNum(delayStats is Map ? delayStats['mean'] : null)}');
+    buffer.writeln('delay.min: ${_fmtNum(delayStats is Map ? delayStats['min'] : null)}');
+    buffer.writeln('delay.max: ${_fmtNum(delayStats is Map ? delayStats['max'] : null)}');
+    buffer.writeln('delay.used_count: ${_fmtInt(delayStats is Map ? delayStats['used_count'] : null)}');
+
+    buffer.writeln('converge_time: ${_fmtNum(payload['converge_time'], digits: 3)}');
+    return buffer.toString();
+  }
+
+  String _safeFileTimestamp(DateTime time) {
+    return time
+        .toIso8601String()
+        .replaceAll(':', '-')
+        .replaceAll('.', '-');
+  }
+
+  TextSpan _buildHighlightedSpan({
+    required String text,
+    required String keyword,
+    required TextStyle baseStyle,
+    required TextStyle highlightStyle,
+  }) {
+    final trimmed = keyword.trim();
+    if (trimmed.isEmpty) {
+      return TextSpan(text: text, style: baseStyle);
+    }
+
+    final lowerText = text.toLowerCase();
+    final lowerKeyword = trimmed.toLowerCase();
+    final spans = <TextSpan>[];
+    var cursor = 0;
+
+    while (cursor < text.length) {
+      final hit = lowerText.indexOf(lowerKeyword, cursor);
+      if (hit < 0) {
+        spans.add(TextSpan(text: text.substring(cursor), style: baseStyle));
+        break;
+      }
+
+      if (hit > cursor) {
+        spans.add(TextSpan(text: text.substring(cursor, hit), style: baseStyle));
+      }
+
+      final end = hit + lowerKeyword.length;
+      spans.add(TextSpan(text: text.substring(hit, end), style: highlightStyle));
+      cursor = end;
+    }
+
+    return TextSpan(style: baseStyle, children: spans);
   }
 
   @override
@@ -775,6 +934,37 @@ class _HomePageState extends State<_HomePage> {
             Text(_analysisHint, style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 8),
             _buildAnalysisResultCard(),
+            if (_analysisResult != null) ...<Widget>[
+              const SizedBox(height: 8),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _analysisLoading ? null : _exportAnalysisAsText,
+                      icon: const Icon(Icons.description_outlined),
+                      label: const Text('导出 TXT'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _analysisLoading ? null : _exportAnalysisAsJson,
+                      icon: const Icon(Icons.data_object),
+                      label: const Text('导出 JSON'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (_analysisExportPath != null) ...<Widget>[
+              const SizedBox(height: 6),
+              Text(
+                '导出文件: $_analysisExportPath',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ],
         ),
       ),
@@ -814,10 +1004,12 @@ class _HomePageState extends State<_HomePage> {
           Text('offset mean: ${_fmtNum(offsetStats is Map ? offsetStats['mean'] : null)}'),
           Text('offset min:  ${_fmtNum(offsetStats is Map ? offsetStats['min'] : null)}'),
           Text('offset max:  ${_fmtNum(offsetStats is Map ? offsetStats['max'] : null)}'),
+          Text('offset used/raw: ${_fmtInt(offsetStats is Map ? offsetStats['used_count'] : null)} / ${_fmtInt(offsetStats is Map ? offsetStats['raw_count'] : null)}'),
           const SizedBox(height: 6),
           Text('delay mean: ${_fmtNum(delayStats is Map ? delayStats['mean'] : null)}'),
           Text('delay min:  ${_fmtNum(delayStats is Map ? delayStats['min'] : null)}'),
           Text('delay max:  ${_fmtNum(delayStats is Map ? delayStats['max'] : null)}'),
+          Text('delay used/raw: ${_fmtInt(delayStats is Map ? delayStats['used_count'] : null)} / ${_fmtInt(delayStats is Map ? delayStats['raw_count'] : null)}'),
           const SizedBox(height: 6),
           Text('converge_time: ${_fmtNum(payload['converge_time'], digits: 3)} s'),
         ],
@@ -826,8 +1018,10 @@ class _HomePageState extends State<_HomePage> {
   }
 
   Widget _buildVisualizationPanel() {
-    final offsetStats = _calcStats(_offsetSeries);
-    final delayStats = _calcStats(_delaySeries);
+    final offsetView = _tailPoints(_offsetSeries);
+    final delayView = _tailPoints(_delaySeries);
+    final offsetStats = _calcStats(offsetView);
+    final delayStats = _calcStats(delayView);
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -861,6 +1055,47 @@ class _HomePageState extends State<_HomePage> {
                 },
                 child: const Text('清空波形'),
               ),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                value: _waveWindowPoints,
+                items: _waveWindowOptions
+                    .map((points) => DropdownMenuItem<int>(
+                          value: points,
+                          child: Text('窗口 $points'),
+                        ))
+                    .toList(growable: false),
+                onChanged: (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _waveWindowPoints = value;
+                  });
+                },
+              ),
+            ],
+          ),
+          Row(
+            children: <Widget>[
+              Text(
+                'Y 缩放 ${_waveZoomY.toStringAsFixed(1)}x',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: _waveZoomY,
+                  min: 0.5,
+                  max: 4.0,
+                  divisions: 14,
+                  label: '${_waveZoomY.toStringAsFixed(1)}x',
+                  onChanged: (value) {
+                    setState(() {
+                      _waveZoomY = value;
+                    });
+                  },
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -870,18 +1105,20 @@ class _HomePageState extends State<_HomePage> {
                 Expanded(
                   child: _buildWaveCard(
                     title: 'offset',
-                    values: _offsetSeries,
+                    values: offsetView,
                     color: const Color(0xFF146EB4),
                     stats: offsetStats,
+                    amplitudeScale: _waveZoomY,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _buildWaveCard(
                     title: 'delay',
-                    values: _delaySeries,
+                    values: delayView,
                     color: const Color(0xFFE36F2D),
                     stats: delayStats,
+                    amplitudeScale: _waveZoomY,
                   ),
                 ),
               ],
@@ -897,6 +1134,7 @@ class _HomePageState extends State<_HomePage> {
     required List<double> values,
     required Color color,
     required _SeriesStats? stats,
+    required double amplitudeScale,
   }) {
     return Container(
       padding: const EdgeInsets.all(10),
@@ -920,6 +1158,7 @@ class _HomePageState extends State<_HomePage> {
                 values: values,
                 lineColor: color,
                 emptyHint: '等待 $title 数据',
+                amplitudeScale: amplitudeScale,
               ),
               child: const SizedBox.expand(),
             ),
@@ -929,6 +1168,10 @@ class _HomePageState extends State<_HomePage> {
             stats == null
                 ? 'mean --  min --  max --'
                 : 'mean ${stats.mean.toStringAsFixed(6)}  min ${stats.min.toStringAsFixed(6)}  max ${stats.max.toStringAsFixed(6)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          Text(
+            stats == null ? 'samples --' : 'samples ${stats.count}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -990,6 +1233,16 @@ class _HomePageState extends State<_HomePage> {
               itemBuilder: (context, index) {
                 final line = filtered[index];
                 final pretty = _tryPrettyJsonLine(line);
+                const baseStyle = TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: Color(0xFFE1EAF2),
+                );
+                final highlightStyle = baseStyle.copyWith(
+                  backgroundColor: const Color(0xFFFFB703),
+                  color: const Color(0xFF102A43),
+                  fontWeight: FontWeight.w700,
+                );
                 return Container(
                   margin: const EdgeInsets.only(bottom: 6),
                   padding: const EdgeInsets.all(8),
@@ -997,12 +1250,12 @@ class _HomePageState extends State<_HomePage> {
                     color: Colors.white.withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Text(
-                    pretty,
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: Color(0xFFE1EAF2),
+                  child: Text.rich(
+                    _buildHighlightedSpan(
+                      text: pretty,
+                      keyword: _logFilterController.text,
+                      baseStyle: baseStyle,
+                      highlightStyle: highlightStyle,
                     ),
                   ),
                 );
@@ -1052,11 +1305,13 @@ class _WaveformPainter extends CustomPainter {
     required this.values,
     required this.lineColor,
     required this.emptyHint,
+    required this.amplitudeScale,
   });
 
   final List<double> values;
   final Color lineColor;
   final String emptyHint;
+  final double amplitudeScale;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1105,6 +1360,7 @@ class _WaveformPainter extends CustomPainter {
     for (final v in values) {
       maxAbs = math.max(maxAbs, v.abs());
     }
+    final displayAbs = math.max(0.000001, maxAbs / amplitudeScale);
 
     final sampled = <double>[];
     final targetCount = plot.width.clamp(2, 800).toInt();
@@ -1123,7 +1379,7 @@ class _WaveformPainter extends CustomPainter {
     final points = <Offset>[];
     for (var i = 0; i < sampled.length; i++) {
       final x = plot.left + (plot.width * i / (sampled.length - 1));
-      final yNorm = (sampled[i] + maxAbs) / (2 * maxAbs);
+      final yNorm = ((sampled[i] + displayAbs) / (2 * displayAbs)).clamp(0.0, 1.0);
       final y = plot.bottom - yNorm * plot.height;
       points.add(Offset(x, y));
     }
@@ -1145,6 +1401,7 @@ class _WaveformPainter extends CustomPainter {
   bool shouldRepaint(covariant _WaveformPainter oldDelegate) {
     return oldDelegate.values != values ||
         oldDelegate.lineColor != lineColor ||
-        oldDelegate.emptyHint != emptyHint;
+        oldDelegate.emptyHint != emptyHint ||
+        oldDelegate.amplitudeScale != amplitudeScale;
   }
 }

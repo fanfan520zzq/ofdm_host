@@ -65,3 +65,15 @@
   - doc/ipc_protocol_v1.md
   - doc/migration_progress.md
   - doc/migration_plan_vibecoding.md
+
+## v0.6.1
+- 时间: 2026-03-28 22:09:25
+- 阶段: phase-3-step2
+- 说明: phase3 export zoom and highlight
+- 文件:
+  - flutter_ui/lib/src/app.dart
+  - flutter_ui/README.md
+  - README.md
+  - doc/README.md
+  - doc/migration_progress.md
+  - doc/migration_plan_vibecoding.md
