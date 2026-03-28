@@ -19,6 +19,48 @@
  - PyQt6>=6.4.0
  - pyserial>=3.5
 
+## 迁移试运行（Phase 1）
+
+当前已新增 Python Core Service 骨架：`core_service.py`，用于后续 Flutter 桌面端对接。
+
+启动服务（JSON Lines over stdin/stdout）：
+
+```bash
+python core_service.py
+```
+
+可选参数：
+
+```bash
+python core_service.py --heartbeat-seconds 5
+```
+
+已实现请求类型：
+- `app.init`
+- `app.ping`
+- `serial.list_ports`
+- `app.shutdown`
+
+协议文档见：`doc/ipc_protocol_v1.md`
+
+## 迁移版本管理（自动 checkpoint）
+
+已提供脚本：`tools/migration_checkpoint.py`，用于在每次阶段性大改后自动完成：
+- 递增 `MIGRATION_VERSION`
+- 追加 `doc/migration_changelog.md`
+- 创建 git commit
+- 创建 git tag（如 `migration-v0.2.0`）
+
+示例：
+
+```bash
+python tools/migration_checkpoint.py \
+	--stage phase-1 \
+	--message "core service scaffold" \
+	--bump minor \
+	--include core_service.py doc/ipc_protocol_v1.md doc/migration_progress.md README.md
+```
+
 ## 打包 EXE（Windows）
 
 安装打包工具：
